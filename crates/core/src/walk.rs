@@ -113,11 +113,9 @@ pub fn walk(
                 match metadata {
                     Ok(metadata) => {
                         let size = metadata.len();
-                        if size > 0 && !filters.file_allowed(&name, &relative, size, hidden) {
-                            return false;
-                        }
-                        if size == 0 && hidden && !filters.file_allowed(&name, &relative, 1, hidden)
-                        {
+                        // Empty files are judged like a 1-byte file so they are only
+                        // reported when the name rules keep them.
+                        if !filters.file_allowed(&name, &relative, size.max(1), hidden) {
                             return false;
                         }
                         entry.client_state = EntryInfo::File(FoundFile {
@@ -240,6 +238,19 @@ mod tests {
             },
         );
         assert!(names(&items).contains(&".hidden/four.txt".to_string()));
+    }
+
+    #[test]
+    fn empty_files_obey_the_name_filters() {
+        let dir = tree();
+        let items = collect(
+            dir.path(),
+            FilterConfig {
+                include_ext: vec!["txt".into()],
+                ..Default::default()
+            },
+        );
+        assert!(!items.iter().any(|i| matches!(i, WalkItem::Empty(_))));
     }
 
     #[test]
