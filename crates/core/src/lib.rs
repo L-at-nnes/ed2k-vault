@@ -1,14 +1,9 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+//! Core library of ed2k-vault: hashing, link building, scanning and output formats.
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub mod ed2k;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+/// Size of an ed2k part (the unit hashed with MD4).
+pub const PART_SIZE: u64 = 9_728_000;
+
+/// Size of an AICH block (the leaf unit hashed with SHA-1).
+pub const AICH_BLOCK_SIZE: u64 = 184_320;
