@@ -4,6 +4,9 @@
 //! split the way eMule does: a node spanning more than one part is split on
 //! part boundaries, a node inside a part on block boundaries, and the left
 //! child of a left branch takes the larger half.
+//!
+//! Blocks never straddle two parts: [`PART_SIZE`] is not a multiple of
+//! [`AICH_BLOCK_SIZE`], so the last block of every full part is shorter.
 
 use sha1::{Digest, Sha1};
 
@@ -16,7 +19,16 @@ pub fn block_hash(data: &[u8]) -> Sha1Digest {
     Sha1::digest(data).into()
 }
 
-/// SHA-1 digests of every block of `data`, in order.
+/// Number of blocks in a full part.
+pub const BLOCKS_PER_PART: u64 = PART_SIZE.div_ceil(AICH_BLOCK_SIZE);
+
+/// Number of block digests expected for a file of `size` bytes.
+pub fn block_count(size: u64) -> u64 {
+    let rest = size % PART_SIZE;
+    size / PART_SIZE * BLOCKS_PER_PART + rest.div_ceil(AICH_BLOCK_SIZE)
+}
+
+/// SHA-1 digests of every block of one part (or file tail), in order.
 pub fn block_hashes(data: &[u8]) -> Vec<Sha1Digest> {
     data.chunks(AICH_BLOCK_SIZE as usize)
         .map(block_hash)
@@ -25,19 +37,22 @@ pub fn block_hashes(data: &[u8]) -> Vec<Sha1Digest> {
 
 /// Root hash of the tree whose leaves are `blocks`, for a file of `size` bytes.
 ///
-/// `blocks` holds one digest per [`AICH_BLOCK_SIZE`] block of the file. An
-/// empty file has no block: its root is the SHA-1 of nothing.
+/// `blocks` holds the digests of each part's blocks, part after part (see
+/// [`block_count`]). An empty file has no block: its root is the SHA-1 of
+/// nothing.
 pub fn root_hash(blocks: &[Sha1Digest], size: u64) -> Sha1Digest {
     if size == 0 {
         return block_hash(b"");
     }
-    debug_assert_eq!(blocks.len() as u64, size.div_ceil(AICH_BLOCK_SIZE));
+    debug_assert_eq!(blocks.len() as u64, block_count(size));
     node_hash(blocks, 0, size, true)
 }
 
 fn node_hash(blocks: &[Sha1Digest], offset: u64, size: u64, is_left: bool) -> Sha1Digest {
     if size <= AICH_BLOCK_SIZE {
-        return blocks[(offset / AICH_BLOCK_SIZE) as usize];
+        let in_part = offset % PART_SIZE;
+        let index = offset / PART_SIZE * BLOCKS_PER_PART + in_part / AICH_BLOCK_SIZE;
+        return blocks[index as usize];
     }
     let base = if size <= PART_SIZE {
         AICH_BLOCK_SIZE
@@ -141,11 +156,20 @@ mod tests {
     }
 
     #[test]
+    fn block_count_accounts_for_short_last_block_of_each_part() {
+        assert_eq!(BLOCKS_PER_PART, 53);
+        assert_eq!(block_count(1), 1);
+        assert_eq!(block_count(PART_SIZE), 53);
+        assert_eq!(block_count(PART_SIZE + 1), 54);
+        assert_eq!(block_count(PART_SIZE * 2), 106);
+    }
+
+    #[test]
     fn nodes_spanning_parts_split_on_part_boundaries() {
-        // 2 full parts + 3 blocks: root has 3 part units, the left node holds
-        // the first two parts and the right node is the 3-block tail.
+        // 2 full parts + a 3-block tail: the root has 3 part units, the left
+        // node holds the first two parts and the right node is the tail.
         let size = PART_SIZE * 2 + AICH_BLOCK_SIZE * 2 + 10;
-        let total = size.div_ceil(AICH_BLOCK_SIZE) as usize;
+        let total = block_count(size) as usize;
         let blocks: Vec<Sha1Digest> = (0..total).map(|i| block_hash(&[i as u8])).collect();
         let part = |index: u64, is_left: bool| {
             node_hash(&blocks, index * PART_SIZE, PART_SIZE, is_left)
@@ -153,5 +177,10 @@ mod tests {
         let left = pair(&part(0, true), &part(1, false));
         let tail = node_hash(&blocks, PART_SIZE * 2, size - PART_SIZE * 2, false);
         assert_eq!(root_hash(&blocks, size), pair(&left, &tail));
+        // the tail's blocks start right after the 2 * 53 blocks of full parts
+        let tail_blocks = &blocks[106..];
+        assert_eq!(tail_blocks.len(), 3);
+        let expected_tail = pair(&tail_blocks[0], &pair(&tail_blocks[1], &tail_blocks[2]));
+        assert_eq!(tail, expected_tail);
     }
 }
