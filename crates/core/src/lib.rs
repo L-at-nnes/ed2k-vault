@@ -3,6 +3,7 @@
 pub mod aich;
 pub mod ed2k;
 pub mod error;
+pub mod pathutil;
 
 /// Size of an ed2k part (the unit hashed with MD4).
 pub const PART_SIZE: u64 = 9_728_000;
