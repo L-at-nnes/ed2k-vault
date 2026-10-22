@@ -18,7 +18,7 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Hash every file below a folder and write the ed2k links
-    Scan(ScanArgs),
+    Scan(Box<ScanArgs>),
     /// Open the graphical interface
     Gui,
 }
