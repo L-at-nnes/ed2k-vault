@@ -166,6 +166,7 @@ version = "0.1.0"
 name = "ed2k-vault-core"
 version = "0.1.0"
 dependencies = [
+ "crossbeam-channel",
  "dirs",
  "globset",
  "jwalk",

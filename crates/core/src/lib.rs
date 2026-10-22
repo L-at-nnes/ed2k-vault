@@ -9,6 +9,7 @@ pub mod hasher;
 pub mod link;
 pub mod output;
 pub mod pathutil;
+pub mod progress;
 pub mod walk;
 
 /// Size of an ed2k part (the unit hashed with MD4).
