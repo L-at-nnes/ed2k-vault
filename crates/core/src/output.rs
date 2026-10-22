@@ -17,6 +17,8 @@ pub enum Format {
     Html,
     /// `[url=ed2k://...]name[/url]` forum tags, one per line.
     UrlTag,
+    /// `name,size,link` with a UTF-8 BOM, safe against spreadsheet formulas.
+    Csv,
 }
 
 impl FromStr for Format {
@@ -27,6 +29,7 @@ impl FromStr for Format {
             "links" | "txt" => Ok(Format::Links),
             "html" => Ok(Format::Html),
             "urltag" | "url-tag" | "bbcode" => Ok(Format::UrlTag),
+            "csv" => Ok(Format::Csv),
             other => Err(format!("unknown format `{other}`")),
         }
     }
@@ -73,6 +76,7 @@ pub fn create(
         Format::Links => Style::Links,
         Format::Html => Style::Html,
         Format::UrlTag => Style::UrlTag,
+        Format::Csv => Style::Csv,
     };
     let mut writer = TextWriter {
         out,
@@ -90,6 +94,7 @@ enum Style {
     Links,
     Html,
     UrlTag,
+    Csv,
 }
 
 struct TextWriter {
@@ -103,8 +108,20 @@ impl TextWriter {
         match self.style {
             Style::Links | Style::UrlTag => Ok(()),
             Style::Html => self.out.write_all(HTML_HEADER.as_bytes()),
+            Style::Csv => self.out.write_all(b"\xEF\xBB\xBFname,size,link\r\n"),
         }
     }
+}
+
+/// Quotes a CSV cell; a leading `= + - @` or control character is defused
+/// with a `'` prefix so spreadsheets never evaluate it.
+fn csv_cell(text: &str) -> String {
+    let mut cell = String::with_capacity(text.len() + 2);
+    if text.starts_with(['=', '+', '-', '@', '\t', '\r']) {
+        cell.push('\'');
+    }
+    cell.push_str(text);
+    format!("\"{}\"", cell.replace('"', "\"\""))
 }
 
 fn escape_html(text: &str) -> String {
@@ -132,6 +149,13 @@ impl EntryWriter for TextWriter {
                 escape_html(entry.name)
             ),
             Style::UrlTag => writeln!(self.out, "[url={link}]{}[/url]", entry.name),
+            Style::Csv => write!(
+                self.out,
+                "{},{},{}\r\n",
+                csv_cell(entry.name),
+                entry.digest.size,
+                csv_cell(&link)
+            ),
         }
     }
 
@@ -198,6 +222,22 @@ mod tests {
         let text = String::from_utf8(out).unwrap();
         assert!(text.starts_with("[url=ed2k://|file|a%20b.txt|42|"));
         assert!(text.trim_end().ends_with("|/]a b.txt[/url]"));
+    }
+
+    #[test]
+    fn csv_has_bom_header_and_quoted_cells() {
+        let out = render(Format::Csv, &["a \"q\", b.txt"], LinkOptions::default());
+        assert!(out.starts_with(b"\xEF\xBB\xBFname,size,link\r\n"));
+        let text = String::from_utf8(out[3..].to_vec()).unwrap();
+        let row = text.lines().nth(1).unwrap();
+        assert!(row.starts_with("\"a \"\"q\"\", b.txt\",42,\"ed2k://"));
+    }
+
+    #[test]
+    fn csv_defuses_spreadsheet_formulas() {
+        let out = render(Format::Csv, &["=HYPERLINK(1)"], LinkOptions::default());
+        let text = String::from_utf8(out[3..].to_vec()).unwrap();
+        assert!(text.contains("\"'=HYPERLINK(1)\""));
     }
 
     #[test]
