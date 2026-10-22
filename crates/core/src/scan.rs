@@ -161,7 +161,7 @@ fn process(ctx: &Context, file: FoundFile) -> Outcome {
             Outcome::Failed(ScanError {
                 path: key,
                 message: match e {
-                    Error::Io { source, .. } => source.to_string(),
+                    Error::Io { cause, .. } => cause.to_string(),
                     other => other.to_string(),
                 },
             })

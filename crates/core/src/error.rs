@@ -4,10 +4,10 @@ use std::path::PathBuf;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("{}: {source}", .path.display())]
+    #[error("{}: {cause}", .path.display())]
     Io {
         path: PathBuf,
-        source: std::io::Error,
+        cause: std::io::Error,
     },
     #[error("{}: file changed while it was being read", .0.display())]
     Modified(PathBuf),
@@ -22,10 +22,10 @@ pub enum Error {
 pub type Result<T> = std::result::Result<T, Error>;
 
 impl Error {
-    pub fn io(path: impl Into<PathBuf>, source: std::io::Error) -> Self {
+    pub fn io(path: impl Into<PathBuf>, cause: std::io::Error) -> Self {
         Error::Io {
             path: path.into(),
-            source,
+            cause,
         }
     }
 }
