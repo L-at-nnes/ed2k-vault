@@ -2,7 +2,7 @@ mod args;
 mod report;
 
 use std::io::IsTerminal;
-use std::process::ExitCode;
+use std::process::{Command, ExitCode};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -12,7 +12,7 @@ use clap::Parser;
 use ed2k_vault_core::progress::Progress;
 use ed2k_vault_core::scan::scan;
 
-use args::{Cli, Command, ScanArgs};
+use args::{Cli, Command as Subcommand, ScanArgs};
 
 /// The scan finished but some files could not be read.
 const EXIT_PARTIAL: u8 = 3;
@@ -22,8 +22,8 @@ const EXIT_CANCELLED: u8 = 130;
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.command {
-        Command::Scan(args) => run_scan(*args),
-        Command::Gui => Err(anyhow::anyhow!("the graphical interface is not built yet")),
+        Subcommand::Scan(args) => run_scan(*args),
+        Subcommand::Gui => run_gui(),
     };
     match result {
         Ok(code) => ExitCode::from(code),
@@ -73,4 +73,16 @@ fn run_scan(args: ScanArgs) -> Result<u8> {
     } else {
         0
     })
+}
+
+/// Starts `ed2k-vault-gui`, which is installed next to this executable.
+fn run_gui() -> Result<u8> {
+    let name = format!("ed2k-vault-gui{}", std::env::consts::EXE_SUFFIX);
+    let exe = std::env::current_exe()
+        .context("cannot locate the running executable")?
+        .with_file_name(name);
+    Command::new(&exe)
+        .spawn()
+        .with_context(|| format!("cannot start {}", exe.display()))?;
+    Ok(0)
 }
