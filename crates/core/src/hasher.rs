@@ -1,14 +1,15 @@
 //! Single-pass file hashing: ed2k (MD4) and AICH (SHA-1) from one read.
 //!
 //! The calling thread reads the file sequentially, one part at a time, and
-//! hands every part to a shared rayon pool. A bounded number of parts is in
-//! flight so memory stays flat whatever the file size.
+//! hands every part to a shared rayon pool. Part buffers come from a bounded
+//! pool shared by all files, so memory stays flat whatever the file size.
 
 use std::fs::File;
 use std::io::{self, Read};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc, Condvar, Mutex};
+use std::time::Duration;
 
 use crate::aich::{self, Sha1Digest};
 use crate::ed2k::{self, Md4Digest};
@@ -34,13 +35,63 @@ struct PartResult {
     index: usize,
     md4: Md4Digest,
     blocks: Vec<Sha1Digest>,
-    buffer: Vec<u8>,
+}
+
+/// Part buffers shared by every file being hashed, so memory stays bounded
+/// no matter how many files are read at once.
+struct BufferPool {
+    free: Mutex<Vec<Vec<u8>>>,
+    available: Condvar,
+    allocated: Mutex<usize>,
+    max: usize,
+}
+
+impl BufferPool {
+    fn new(max: usize) -> Self {
+        Self {
+            free: Mutex::new(Vec::new()),
+            available: Condvar::new(),
+            allocated: Mutex::new(0),
+            max,
+        }
+    }
+
+    /// Blocks until a buffer is available. Buffers are given back by hashing
+    /// tasks that never block, so waiting always ends.
+    fn acquire(&self, cancel: &AtomicBool) -> Result<Vec<u8>> {
+        let mut free = self.free.lock().unwrap();
+        loop {
+            if cancel.load(Ordering::Relaxed) {
+                return Err(Error::Cancelled);
+            }
+            if let Some(buffer) = free.pop() {
+                return Ok(buffer);
+            }
+            {
+                let mut allocated = self.allocated.lock().unwrap();
+                if *allocated < self.max {
+                    *allocated += 1;
+                    return Ok(Vec::new());
+                }
+            }
+            free = self
+                .available
+                .wait_timeout(free, Duration::from_millis(100))
+                .unwrap()
+                .0;
+        }
+    }
+
+    fn release(&self, buffer: Vec<u8>) {
+        self.free.lock().unwrap().push(buffer);
+        self.available.notify_one();
+    }
 }
 
 pub struct Hasher {
     pool: rayon::ThreadPool,
+    buffers: Arc<BufferPool>,
     aich: bool,
-    in_flight: usize,
 }
 
 impl Hasher {
@@ -55,8 +106,8 @@ impl Hasher {
             .map_err(|e| Error::Invalid(e.to_string()))?;
         Ok(Self {
             pool,
+            buffers: Arc::new(BufferPool::new(threads * 2 + 2)),
             aich,
-            in_flight: threads + 1,
         })
     }
 
@@ -78,59 +129,33 @@ impl Hasher {
         let reads = size.div_ceil(PART_SIZE).max(1);
 
         let (tx, rx) = mpsc::channel::<PartResult>();
-        let mut free: Vec<Vec<u8>> = Vec::new();
-        let mut allocated = 0;
-        let mut pending = 0;
-        let mut slots: Vec<Option<(Md4Digest, Vec<Sha1Digest>)>> = Vec::new();
-        slots.resize_with(reads as usize, || None);
-
-        let mut store = |result: PartResult, free: &mut Vec<Vec<u8>>| {
-            slots[result.index] = Some((result.md4, result.blocks));
-            free.push(result.buffer);
-        };
-
         for index in 0..reads {
-            let mut buffer = loop {
-                if cancel.load(Ordering::Relaxed) {
-                    return Err(Error::Cancelled);
-                }
-                if let Some(buffer) = free.pop() {
-                    break buffer;
-                }
-                if allocated < self.in_flight {
-                    allocated += 1;
-                    break Vec::new();
-                }
-                let result = rx.recv().expect("hash worker lost");
-                pending -= 1;
-                store(result, &mut free);
-            };
+            let mut buffer = self.buffers.acquire(cancel)?;
             buffer.resize((size - index * PART_SIZE).min(PART_SIZE) as usize, 0);
-            read_part(&mut file, &mut buffer, cancel, on_bytes).map_err(|e| match e {
-                ReadError::Cancelled => Error::Cancelled,
-                ReadError::Truncated => Error::Modified(path.to_path_buf()),
-                ReadError::Io(source) => Error::io(path, source),
-            })?;
+            if let Err(e) = read_part(&mut file, &mut buffer, cancel, on_bytes) {
+                self.buffers.release(buffer);
+                return Err(match e {
+                    ReadError::Cancelled => Error::Cancelled,
+                    ReadError::Truncated => Error::Modified(path.to_path_buf()),
+                    ReadError::Io(source) => Error::io(path, source),
+                });
+            }
 
             let tx = tx.clone();
+            let buffers = Arc::clone(&self.buffers);
             let with_aich = self.aich;
             let index = index as usize;
-            pending += 1;
             self.pool.spawn(move || {
                 let (md4, blocks) = hash_part(&buffer, with_aich);
-                let _ = tx.send(PartResult {
-                    index,
-                    md4,
-                    blocks,
-                    buffer,
-                });
+                buffers.release(buffer);
+                let _ = tx.send(PartResult { index, md4, blocks });
             });
         }
         drop(tx);
-        while pending > 0 {
-            let result = rx.recv().expect("hash worker lost");
-            pending -= 1;
-            store(result, &mut free);
+        let mut slots: Vec<Option<(Md4Digest, Vec<Sha1Digest>)>> = Vec::new();
+        slots.resize_with(reads as usize, || None);
+        for result in rx {
+            slots[result.index] = Some((result.md4, result.blocks));
         }
 
         let after = file.metadata().map_err(io_err)?;
