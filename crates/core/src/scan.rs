@@ -12,6 +12,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{bounded, unbounded};
+use unicode_normalization::UnicodeNormalization;
 
 use crate::cache::Cache;
 use crate::error::{Error, Result};
@@ -113,6 +114,11 @@ struct Context<'a> {
     cancel: &'a AtomicBool,
 }
 
+/// Names are written in NFC so macOS (NFD) and other systems agree in every format.
+fn nfc(name: &str) -> String {
+    name.nfc().collect()
+}
+
 fn process(ctx: &Context, file: FoundFile) -> Outcome {
     let key = pathutil::display(&file.path);
     ctx.progress.set_last_file(&file.relative);
@@ -125,7 +131,7 @@ fn process(ctx: &Context, file: FoundFile) -> Outcome {
             ctx.progress.files_done.fetch_add(1, Ordering::Relaxed);
             ctx.progress.files_cached.fetch_add(1, Ordering::Relaxed);
             return Outcome::Hashed {
-                name: file.name,
+                name: nfc(&file.name),
                 digest,
                 cached: true,
             };
@@ -146,7 +152,7 @@ fn process(ctx: &Context, file: FoundFile) -> Outcome {
             }
             ctx.progress.files_done.fetch_add(1, Ordering::Relaxed);
             Outcome::Hashed {
-                name: file.name,
+                name: nfc(&file.name),
                 digest,
                 cached: false,
             }
@@ -464,6 +470,18 @@ mod tests {
         assert!(second.errors.is_empty());
         let text = fs::read_to_string(dir.path().join("links.txt")).unwrap();
         assert!(!text.contains("links.txt") && !text.contains("cache.db"));
+    }
+
+    #[test]
+    fn names_are_written_in_nfc_in_every_format() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("e\u{301}te\u{301}.txt"), b"x").unwrap();
+        let out = tempfile::NamedTempFile::new().unwrap();
+        let mut config = config(dir.path(), out.path());
+        config.format = Format::Csv;
+        run(&config);
+        let text = fs::read_to_string(out.path()).unwrap();
+        assert!(text.contains("\"\u{e9}t\u{e9}.txt\""));
     }
 
     #[test]
