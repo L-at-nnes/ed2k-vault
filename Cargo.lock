@@ -325,6 +325,7 @@ dependencies = [
  "ctrlc",
  "ed2k-vault-core",
  "indicatif",
+ "tempfile",
 ]
 
 [[package]]
