@@ -102,10 +102,7 @@ impl Cache {
         Some(FileDigest {
             size,
             hash: hash.try_into().ok()?,
-            part_hashes: parts
-                .chunks_exact(16)
-                .map(|chunk| chunk.try_into().unwrap())
-                .collect(),
+            part_hashes: parts.as_chunks::<16>().0.to_vec(),
             aich: match aich {
                 Some(bytes) => Some(bytes.try_into().ok()?),
                 None => None,
