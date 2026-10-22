@@ -4,6 +4,7 @@ pub mod aich;
 pub mod ed2k;
 pub mod error;
 pub mod hasher;
+pub mod link;
 pub mod pathutil;
 
 /// Size of an ed2k part (the unit hashed with MD4).
