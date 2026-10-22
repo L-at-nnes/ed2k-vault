@@ -54,10 +54,7 @@ mod tests {
 
     #[test]
     fn empty_input_has_the_well_known_md4() {
-        assert_eq!(
-            to_hex(&part_hash(b"")),
-            "31d6cfe0d16ae931b73c59d7e0c089c0"
-        );
+        assert_eq!(to_hex(&part_hash(b"")), "31d6cfe0d16ae931b73c59d7e0c089c0");
     }
 
     #[test]

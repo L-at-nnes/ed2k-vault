@@ -13,6 +13,8 @@ use crate::link::{self, LinkOptions};
 pub enum Format {
     /// One link per line.
     Links,
+    /// `<a href>` tags in a minimal HTML page.
+    Html,
 }
 
 impl FromStr for Format {
@@ -21,6 +23,7 @@ impl FromStr for Format {
     fn from_str(s: &str) -> std::result::Result<Self, String> {
         match s.to_ascii_lowercase().as_str() {
             "links" | "txt" => Ok(Format::Links),
+            "html" => Ok(Format::Html),
             other => Err(format!("unknown format `{other}`")),
         }
     }
@@ -47,6 +50,9 @@ pub enum Target<'a> {
 
 const BUFFER_SIZE: usize = 1 << 20;
 
+const HTML_HEADER: &str = "<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n<title>ed2k links</title>\n</head>\n<body>\n";
+const HTML_FOOTER: &str = "</body>\n</html>\n";
+
 /// Opens `target` and returns the writer for `format`.
 pub fn create(
     format: Format,
@@ -60,18 +66,25 @@ pub fn create(
         }
         Target::Stdout => Box::new(BufWriter::new(io::stdout())),
     };
-    Ok(match format {
-        Format::Links => Box::new(TextWriter {
-            out,
-            options,
-            style: Style::Links,
-        }),
-    })
+    let style = match format {
+        Format::Links => Style::Links,
+        Format::Html => Style::Html,
+    };
+    let mut writer = TextWriter {
+        out,
+        options,
+        style,
+    };
+    writer
+        .write_header()
+        .map_err(|e| Error::Invalid(e.to_string()))?;
+    Ok(Box::new(writer))
 }
 
 #[derive(Clone, Copy)]
 enum Style {
     Links,
+    Html,
 }
 
 struct TextWriter {
@@ -80,15 +93,46 @@ struct TextWriter {
     style: Style,
 }
 
+impl TextWriter {
+    fn write_header(&mut self) -> io::Result<()> {
+        match self.style {
+            Style::Links => Ok(()),
+            Style::Html => self.out.write_all(HTML_HEADER.as_bytes()),
+        }
+    }
+}
+
+fn escape_html(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
 impl EntryWriter for TextWriter {
     fn write_entry(&mut self, entry: &Entry) -> io::Result<()> {
         let link = link::build(entry.name, entry.digest, self.options);
         match self.style {
             Style::Links => writeln!(self.out, "{link}"),
+            Style::Html => writeln!(
+                self.out,
+                "<a href=\"{link}\">{}</a><br>",
+                escape_html(entry.name)
+            ),
         }
     }
 
     fn finish(mut self: Box<Self>) -> io::Result<()> {
+        if matches!(self.style, Style::Html) {
+            self.out.write_all(HTML_FOOTER.as_bytes())?;
+        }
         self.out.flush()
     }
 }
@@ -111,7 +155,12 @@ mod tests {
         let mut writer = create(format, Target::File(file.path()), options).unwrap();
         let digest = digest();
         for name in names {
-            writer.write_entry(&Entry { name, digest: &digest }).unwrap();
+            writer
+                .write_entry(&Entry {
+                    name,
+                    digest: &digest,
+                })
+                .unwrap();
         }
         writer.finish().unwrap();
         std::fs::read(file.path()).unwrap()
@@ -125,6 +174,16 @@ mod tests {
         assert_eq!(lines.len(), 2);
         assert!(lines[0].starts_with("ed2k://|file|a%20b.txt|42|"));
         assert!(lines[1].starts_with("ed2k://|file|c.txt|42|"));
+    }
+
+    #[test]
+    fn html_wraps_links_in_anchors_and_escapes_names() {
+        let out = render(Format::Html, &["a&b<c>.txt"], LinkOptions::default());
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.starts_with("<!DOCTYPE html>"));
+        assert!(text.contains("<a href=\"ed2k://|file|a%26b%3Cc%3E.txt|42|"));
+        assert!(text.contains(">a&amp;b&lt;c&gt;.txt</a><br>"));
+        assert!(text.trim_end().ends_with("</html>"));
     }
 
     #[test]

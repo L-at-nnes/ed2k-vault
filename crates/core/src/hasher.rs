@@ -197,7 +197,9 @@ mod tests {
 
     fn write_file(len: u64, seed: u8) -> tempfile::NamedTempFile {
         let mut file = tempfile::NamedTempFile::new().unwrap();
-        let chunk: Vec<u8> = (0..65536u32).map(|i| (i as u8).wrapping_add(seed)).collect();
+        let chunk: Vec<u8> = (0..65536u32)
+            .map(|i| (i as u8).wrapping_add(seed))
+            .collect();
         let mut left = len;
         while left > 0 {
             let n = left.min(chunk.len() as u64) as usize;

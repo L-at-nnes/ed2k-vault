@@ -171,9 +171,8 @@ mod tests {
         let size = PART_SIZE * 2 + AICH_BLOCK_SIZE * 2 + 10;
         let total = block_count(size) as usize;
         let blocks: Vec<Sha1Digest> = (0..total).map(|i| block_hash(&[i as u8])).collect();
-        let part = |index: u64, is_left: bool| {
-            node_hash(&blocks, index * PART_SIZE, PART_SIZE, is_left)
-        };
+        let part =
+            |index: u64, is_left: bool| node_hash(&blocks, index * PART_SIZE, PART_SIZE, is_left);
         let left = pair(&part(0, true), &part(1, false));
         let tail = node_hash(&blocks, PART_SIZE * 2, size - PART_SIZE * 2, false);
         assert_eq!(root_hash(&blocks, size), pair(&left, &tail));
