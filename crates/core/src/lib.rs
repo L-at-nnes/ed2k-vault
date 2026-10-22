@@ -1,6 +1,7 @@
 //! Core library of ed2k-vault: hashing, link building, scanning and output formats.
 
 pub mod aich;
+pub mod cache;
 pub mod ed2k;
 pub mod error;
 pub mod filter;
