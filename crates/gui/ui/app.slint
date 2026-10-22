@@ -1,11 +1,324 @@
-import { Button } from "std-widgets.slint";
+import { Button, CheckBox, ComboBox, LineEdit, ProgressIndicator, ScrollView, SpinBox, TextEdit, Palette } from "std-widgets.slint";
+
+component SectionTitle inherits Text {
+    font-size: 13px;
+    font-weight: 600;
+    color: Palette.foreground;
+}
+
+component Hint inherits Text {
+    font-size: 12px;
+    color: Palette.foreground.with-alpha(0.6);
+    wrap: word-wrap;
+}
+
+component Field inherits HorizontalLayout {
+    in property <string> label;
+    in property <length> label-width: 150px;
+    spacing: 12px;
+    alignment: LayoutAlignment.stretch;
+
+    Text {
+        text: root.label;
+        width: root.label-width;
+        vertical-alignment: center;
+        color: Palette.foreground;
+    }
+
+    @children
+}
+
+component Card inherits Rectangle {
+    background: Palette.alternate-background;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: Palette.border;
+    @children
+}
 
 export component MainWindow inherits Window {
     title: "ed2k-vault";
-    preferred-width: 760px;
-    preferred-height: 640px;
+    min-width: 640px;
+    min-height: 560px;
+    preferred-width: 780px;
+    preferred-height: 860px;
+    background: Palette.background;
 
-    Button {
-        text: "Prototype";
+    in-out property <string> root-path;
+    in-out property <string> output-path;
+    in property <[string]> formats;
+    in-out property <int> format-index: 0;
+    in-out property <bool> aich: true;
+    in-out property <bool> hashset: false;
+    in-out property <bool> hidden: false;
+    in-out property <bool> use-cache: true;
+    in-out property <string> include-ext;
+    in-out property <string> exclude-ext;
+    in-out property <string> exclude;
+    in-out property <string> exclude-dirs;
+    in-out property <string> min-size;
+    in-out property <string> max-size;
+    in-out property <int> threads: 4;
+    in-out property <int> jobs: 2;
+
+    in property <bool> running: false;
+    in property <float> progress: 0;
+    in property <string> status;
+    in property <string> current-file;
+    in property <string> report;
+    in property <string> error;
+
+    callback browse-root();
+    callback browse-output();
+    callback format-changed(int);
+    callback start();
+    callback cancel();
+
+    VerticalLayout {
+        padding: 20px;
+        spacing: 14px;
+
+        VerticalLayout {
+            spacing: 2px;
+            Text {
+                text: "ed2k-vault";
+                font-size: 24px;
+                font-weight: 700;
+                color: Palette.foreground;
+            }
+            Hint {
+                text: "Generate ed2k links for a whole folder tree, without eMule.";
+            }
+        }
+
+        ScrollView {
+            VerticalLayout {
+                spacing: 14px;
+                padding-right: 12px;
+
+                Card {
+                    VerticalLayout {
+                        padding: 16px;
+                        spacing: 10px;
+                        SectionTitle { text: "Source and result"; }
+                        Field {
+                            label: "Folder to scan";
+                            LineEdit {
+                                text <=> root.root-path;
+                                placeholder-text: "D:\\Share or \\\\NAS\\media";
+                                enabled: !root.running;
+                            }
+                            Button {
+                                text: "Browse…";
+                                enabled: !root.running;
+                                clicked => { root.browse-root(); }
+                            }
+                        }
+                        Field {
+                            label: "Save result as";
+                            LineEdit {
+                                text <=> root.output-path;
+                                placeholder-text: "links.html";
+                                enabled: !root.running;
+                            }
+                            Button {
+                                text: "Choose…";
+                                enabled: !root.running;
+                                clicked => { root.browse-output(); }
+                            }
+                        }
+                        Field {
+                            label: "Format";
+                            ComboBox {
+                                model: root.formats;
+                                current-index <=> root.format-index;
+                                enabled: !root.running;
+                                selected => { root.format-changed(self.current-index); }
+                            }
+                        }
+                    }
+                }
+
+                Card {
+                    VerticalLayout {
+                        padding: 16px;
+                        spacing: 8px;
+                        SectionTitle { text: "Link content"; }
+                        CheckBox {
+                            text: "AICH root hash (h=)";
+                            checked <=> root.aich;
+                            enabled: !root.running;
+                        }
+                        CheckBox {
+                            text: "Complete hashset (p=hash1:hash2:…)";
+                            checked <=> root.hashset;
+                            enabled: !root.running;
+                        }
+                        Hint {
+                            text: "Names are kept exactly as they are on disk.";
+                        }
+                    }
+                }
+
+                Card {
+                    VerticalLayout {
+                        padding: 16px;
+                        spacing: 10px;
+                        SectionTitle { text: "Filters"; }
+                        Field {
+                            label: "Only extensions";
+                            LineEdit {
+                                text <=> root.include-ext;
+                                placeholder-text: "mkv, avi, iso (empty = everything)";
+                                enabled: !root.running;
+                            }
+                        }
+                        Field {
+                            label: "Skip extensions";
+                            LineEdit {
+                                text <=> root.exclude-ext;
+                                placeholder-text: "tmp, part";
+                                enabled: !root.running;
+                            }
+                        }
+                        Field {
+                            label: "Skip files";
+                            LineEdit {
+                                text <=> root.exclude;
+                                placeholder-text: "*.nfo, Thumbs.db";
+                                enabled: !root.running;
+                            }
+                        }
+                        Field {
+                            label: "Skip folders";
+                            LineEdit {
+                                text <=> root.exclude-dirs;
+                                placeholder-text: "@eaDir, $RECYCLE.BIN";
+                                enabled: !root.running;
+                            }
+                        }
+                        Field {
+                            label: "Size between";
+                            LineEdit {
+                                text <=> root.min-size;
+                                placeholder-text: "min, e.g. 1MB";
+                                enabled: !root.running;
+                            }
+                            LineEdit {
+                                text <=> root.max-size;
+                                placeholder-text: "max, e.g. 4GB";
+                                enabled: !root.running;
+                            }
+                        }
+                        CheckBox {
+                            text: "Include hidden files and folders";
+                            checked <=> root.hidden;
+                            enabled: !root.running;
+                        }
+                    }
+                }
+
+                Card {
+                    VerticalLayout {
+                        padding: 16px;
+                        spacing: 10px;
+                        SectionTitle { text: "Performance"; }
+                        Field {
+                            label: "Hashing threads";
+                            HorizontalLayout {
+                                alignment: LayoutAlignment.start;
+                                SpinBox {
+                                    value <=> root.threads;
+                                    minimum: 1;
+                                    maximum: 64;
+                                    enabled: !root.running;
+                                }
+                            }
+                        }
+                        Field {
+                            label: "Files read at once";
+                            HorizontalLayout {
+                                alignment: LayoutAlignment.start;
+                                SpinBox {
+                                    value <=> root.jobs;
+                                    minimum: 1;
+                                    maximum: 16;
+                                    enabled: !root.running;
+                                }
+                            }
+                        }
+                        CheckBox {
+                            text: "Incremental cache (only new or modified files are hashed again)";
+                            checked <=> root.use-cache;
+                            enabled: !root.running;
+                        }
+                        Hint {
+                            text: "Hard drives and NAS prefer few files at once; SSDs handle more.";
+                        }
+                    }
+                }
+            }
+        }
+
+        Card {
+            VerticalLayout {
+                padding: 16px;
+                spacing: 10px;
+
+                HorizontalLayout {
+                    spacing: 12px;
+                    alignment: LayoutAlignment.stretch;
+                    VerticalLayout {
+                        spacing: 6px;
+                        horizontal-stretch: 1;
+                        ProgressIndicator {
+                            progress: root.progress;
+                            indeterminate: root.running && root.progress <= 0;
+                        }
+                        Text {
+                            text: root.status;
+                            color: Palette.foreground;
+                            font-size: 12px;
+                            overflow: elide;
+                        }
+                        Hint {
+                            text: root.current-file;
+                            overflow: elide;
+                            wrap: no-wrap;
+                        }
+                    }
+                    Button {
+                        text: root.running ? "Cancel" : "Start scan";
+                        primary: !root.running;
+                        min-width: 110px;
+                        clicked => {
+                            if (root.running) {
+                                root.cancel();
+                            } else {
+                                root.start();
+                            }
+                        }
+                    }
+                }
+
+                if root.error != "": Text {
+                    text: root.error;
+                    color: #d13438;
+                    wrap: word-wrap;
+                }
+
+                if root.report != "": TextEdit {
+                    text: root.report;
+                    read-only: true;
+                    height: 120px;
+                    wrap: word-wrap;
+                }
+            }
+        }
+
+        Hint {
+            text: "Built with Slint (royalty-free license). Released under the MIT license.";
+            horizontal-alignment: center;
+        }
     }
 }
