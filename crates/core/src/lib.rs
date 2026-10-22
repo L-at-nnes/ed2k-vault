@@ -3,6 +3,7 @@
 pub mod aich;
 pub mod ed2k;
 pub mod error;
+pub mod filter;
 pub mod hasher;
 pub mod link;
 pub mod output;
