@@ -1,3 +1,5 @@
+mod args;
+
 fn main() {
-    println!("Hello, world!");
+    println!("ed2k-vault");
 }
