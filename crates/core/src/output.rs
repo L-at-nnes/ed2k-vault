@@ -15,6 +15,8 @@ pub enum Format {
     Links,
     /// `<a href>` tags in a minimal HTML page.
     Html,
+    /// `[url=ed2k://...]name[/url]` forum tags, one per line.
+    UrlTag,
 }
 
 impl FromStr for Format {
@@ -24,6 +26,7 @@ impl FromStr for Format {
         match s.to_ascii_lowercase().as_str() {
             "links" | "txt" => Ok(Format::Links),
             "html" => Ok(Format::Html),
+            "urltag" | "url-tag" | "bbcode" => Ok(Format::UrlTag),
             other => Err(format!("unknown format `{other}`")),
         }
     }
@@ -69,6 +72,7 @@ pub fn create(
     let style = match format {
         Format::Links => Style::Links,
         Format::Html => Style::Html,
+        Format::UrlTag => Style::UrlTag,
     };
     let mut writer = TextWriter {
         out,
@@ -85,6 +89,7 @@ pub fn create(
 enum Style {
     Links,
     Html,
+    UrlTag,
 }
 
 struct TextWriter {
@@ -96,7 +101,7 @@ struct TextWriter {
 impl TextWriter {
     fn write_header(&mut self) -> io::Result<()> {
         match self.style {
-            Style::Links => Ok(()),
+            Style::Links | Style::UrlTag => Ok(()),
             Style::Html => self.out.write_all(HTML_HEADER.as_bytes()),
         }
     }
@@ -126,6 +131,7 @@ impl EntryWriter for TextWriter {
                 "<a href=\"{link}\">{}</a><br>",
                 escape_html(entry.name)
             ),
+            Style::UrlTag => writeln!(self.out, "[url={link}]{}[/url]", entry.name),
         }
     }
 
@@ -184,6 +190,14 @@ mod tests {
         assert!(text.contains("<a href=\"ed2k://|file|a%26b%3Cc%3E.txt|42|"));
         assert!(text.contains(">a&amp;b&lt;c&gt;.txt</a><br>"));
         assert!(text.trim_end().ends_with("</html>"));
+    }
+
+    #[test]
+    fn url_tags_show_the_plain_name() {
+        let out = render(Format::UrlTag, &["a b.txt"], LinkOptions::default());
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.starts_with("[url=ed2k://|file|a%20b.txt|42|"));
+        assert!(text.trim_end().ends_with("|/]a b.txt[/url]"));
     }
 
     #[test]
