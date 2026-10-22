@@ -1,5 +1,6 @@
 //! Core library of ed2k-vault: hashing, link building, scanning and output formats.
 
+pub mod aich;
 pub mod ed2k;
 
 /// Size of an ed2k part (the unit hashed with MD4).
