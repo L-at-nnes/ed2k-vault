@@ -53,6 +53,28 @@ fn main() -> Result<(), slint::PlatformError> {
     ui.set_jobs(default_jobs(threads) as i32);
 
     let run: Rc<RefCell<Option<Run>>> = Rc::default();
+    // Closing the window mid-scan cancels it first so the output file is finalized.
+    let quit_when_done = Arc::new(AtomicBool::new(false));
+
+    ui.window().on_close_requested({
+        let ui = ui.as_weak();
+        let run = Rc::clone(&run);
+        let quit_when_done = Arc::clone(&quit_when_done);
+        move || {
+            let running = ui.upgrade().is_some_and(|ui| ui.get_running());
+            if !running {
+                return slint::CloseRequestResponse::HideWindow;
+            }
+            if let Some(run) = run.borrow().as_ref() {
+                run.cancel.store(true, Ordering::Relaxed);
+            }
+            quit_when_done.store(true, Ordering::Relaxed);
+            if let Some(ui) = ui.upgrade() {
+                ui.set_status("Cancelling, the window closes when the file is saved…".into());
+            }
+            slint::CloseRequestResponse::KeepWindowShown
+        }
+    });
 
     ui.on_browse_root({
         let ui = ui.as_weak();
@@ -94,6 +116,7 @@ fn main() -> Result<(), slint::PlatformError> {
     ui.on_start({
         let ui = ui.as_weak();
         let run = Rc::clone(&run);
+        let quit_when_done = Arc::clone(&quit_when_done);
         move || {
             let Some(ui) = ui.upgrade() else { return };
             ui.set_error("".into());
@@ -118,6 +141,7 @@ fn main() -> Result<(), slint::PlatformError> {
             ui.set_running(true);
 
             let weak = ui.as_weak();
+            let quit_when_done = Arc::clone(&quit_when_done);
             std::thread::spawn(move || {
                 let result = scan(&config, &progress, &cancel);
                 let _ = slint::invoke_from_event_loop(move || {
@@ -135,6 +159,9 @@ fn main() -> Result<(), slint::PlatformError> {
                             ui.set_status("".into());
                             ui.set_error(error.to_string().into());
                         }
+                    }
+                    if quit_when_done.load(Ordering::Relaxed) {
+                        let _ = slint::quit_event_loop();
                     }
                 });
             });
