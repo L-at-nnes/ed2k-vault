@@ -169,6 +169,29 @@ fn process(ctx: &Context, file: FoundFile) -> Outcome {
     }
 }
 
+/// Canonical paths of the files this scan creates (output, cache and its
+/// SQLite side files).
+fn own_files(config: &ScanConfig) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    for path in config.output.iter().chain(config.cache.iter()) {
+        if let Ok(canonical) = pathutil::extended(path) {
+            files.push(canonical);
+        }
+    }
+    if let Some(cache) = config
+        .cache
+        .as_ref()
+        .and_then(|p| pathutil::extended(p).ok())
+    {
+        for suffix in ["-wal", "-shm", "-journal"] {
+            let mut name = cache.clone().into_os_string();
+            name.push(suffix);
+            files.push(PathBuf::from(name));
+        }
+    }
+    files
+}
+
 /// Runs a scan. Cancelling through `cancel` ends it cleanly: the output is
 /// finalized with what was written so far and the cache keeps every digest
 /// already computed, so running the same scan again resumes almost instantly.
@@ -203,6 +226,9 @@ pub fn scan(config: &ScanConfig, progress: &Progress, cancel: &AtomicBool) -> Re
     };
     let mut writer = output::create(config.format, target, config.link)?;
 
+    // The result and the cache may live inside the scanned folder: never hash them.
+    let own_files = own_files(config);
+
     let jobs = config.jobs.max(1);
     let (work_tx, work_rx) = bounded::<(u64, FoundFile)>(jobs * 4);
     let (result_tx, result_rx) = unbounded::<(u64, Outcome)>();
@@ -217,8 +243,11 @@ pub fn scan(config: &ScanConfig, progress: &Progress, cancel: &AtomicBool) -> Re
     thread::scope(|scope| {
         let producer_results = result_tx.clone();
         let root = &root;
+        let own_files = &own_files;
         scope.spawn(move || {
-            for (seq, item) in walk(root, filters, jobs.max(2)).enumerate() {
+            let items = walk(root, filters, jobs.max(2))
+                .filter(|item| !matches!(item, WalkItem::File(f) if own_files.contains(&f.path)));
+            for (seq, item) in items.enumerate() {
                 let seq = seq as u64;
                 if cancel.load(Ordering::Relaxed) {
                     break;
@@ -421,6 +450,20 @@ mod tests {
         assert!(summary.cancelled);
         let text = fs::read_to_string(out.path()).unwrap();
         assert!(text.trim_end().ends_with("</html>"));
+    }
+
+    #[test]
+    fn output_and_cache_inside_the_scanned_folder_are_not_hashed() {
+        let dir = tree();
+        let mut config = config(dir.path(), &dir.path().join("links.txt"));
+        config.cache = Some(dir.path().join("cache.db"));
+        let first = run(&config);
+        let second = run(&config);
+        assert_eq!(first.files_written, 4);
+        assert_eq!(second.files_written, 4);
+        assert!(second.errors.is_empty());
+        let text = fs::read_to_string(dir.path().join("links.txt")).unwrap();
+        assert!(!text.contains("links.txt") && !text.contains("cache.db"));
     }
 
     #[test]
