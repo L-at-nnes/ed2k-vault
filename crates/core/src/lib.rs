@@ -8,6 +8,7 @@ pub mod hasher;
 pub mod link;
 pub mod output;
 pub mod pathutil;
+pub mod walk;
 
 /// Size of an ed2k part (the unit hashed with MD4).
 pub const PART_SIZE: u64 = 9_728_000;

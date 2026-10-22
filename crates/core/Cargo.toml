@@ -12,6 +12,7 @@ rayon = "1"
 thiserror = "2"
 unicode-normalization = "0.1"
 globset = "0.4"
+jwalk = "0.8"
 
 [dev-dependencies]
 tempfile = "3"
