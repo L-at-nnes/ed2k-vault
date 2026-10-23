@@ -2,3 +2,4 @@
 *.db
 *.sqlite
 ROADMAP.md
+/portable
