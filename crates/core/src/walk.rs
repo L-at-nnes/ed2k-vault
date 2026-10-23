@@ -133,6 +133,15 @@ pub fn walk(
         });
 
     iter.into_iter().filter_map(|entry| match entry {
+        // A folder that could not be listed is reported, not silently ignored.
+        Ok(entry) if entry.read_children_error.is_some() => Some(WalkItem::Error {
+            message: entry
+                .read_children_error
+                .as_ref()
+                .map(error_message)
+                .unwrap_or_default(),
+            path: entry.path(),
+        }),
         Ok(entry) => match entry.client_state.clone() {
             EntryInfo::File(file) if file.size == 0 => Some(WalkItem::Empty(file.path)),
             EntryInfo::File(file) => Some(WalkItem::File(file)),
@@ -144,9 +153,17 @@ pub fn walk(
         },
         Err(e) => Some(WalkItem::Error {
             path: e.path().map(Path::to_path_buf).unwrap_or_default(),
-            message: e.to_string(),
+            message: error_message(&e),
         }),
     })
+}
+
+/// The OS message without the path jwalk repeats.
+fn error_message(error: &jwalk::Error) -> String {
+    error
+        .io_error()
+        .map(|e| e.to_string())
+        .unwrap_or_else(|| error.to_string())
 }
 
 fn relative_path(base: &Path, path: &Path) -> String {
