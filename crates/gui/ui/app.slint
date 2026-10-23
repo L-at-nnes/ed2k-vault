@@ -93,6 +93,7 @@ export component MainWindow inherits Window {
         }
 
         ScrollView {
+            vertical-stretch: 1;
             viewport-width: self.visible-width;
             VerticalLayout {
                 spacing: 14px;
@@ -263,17 +264,22 @@ export component MainWindow inherits Window {
         }
 
         Card {
+            vertical-stretch: 0;
             VerticalLayout {
                 padding: 16px;
                 spacing: 10px;
+                alignment: LayoutAlignment.start;
 
                 HorizontalLayout {
                     spacing: 12px;
                     alignment: LayoutAlignment.stretch;
+                    vertical-stretch: 0;
                     VerticalLayout {
                         spacing: 6px;
+                        alignment: LayoutAlignment.start;
                         horizontal-stretch: 1;
                         ProgressIndicator {
+                            height: 8px;
                             progress: root.progress;
                             indeterminate: root.running && root.progress <= 0;
                         }
@@ -293,6 +299,8 @@ export component MainWindow inherits Window {
                         text: root.running ? "Cancel" : "Start scan";
                         primary: !root.running;
                         min-width: 110px;
+                        height: 36px;
+                        vertical-stretch: 0;
                         clicked => {
                             if (root.running) {
                                 root.cancel();
