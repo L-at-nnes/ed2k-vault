@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/icon.png" width="112" alt="Icône ed2k-vault"></p>
+
 # ed2k-vault
 
 Génère des liens ed2k pour toute une arborescence, **sans eMule**. Pointez un dossier (local, disque externe, NAS/UNC) et récupérez vos fichiers sous forme de liens nommés exactement comme sur le disque : une mini-sauvegarde personnelle à relancer dans eMule après un sinistre.
@@ -44,6 +46,21 @@ Le format se déduit de l'extension de `--out` (`.html`, `.csv`, `.emulecollecti
 Codes de sortie : `0` succès, `1` erreur fatale, `3` terminé mais certains fichiers illisibles, `130` annulé avec Ctrl-C (la sortie est complète jusque-là ; relancez la même commande pour reprendre).
 
 Les fichiers vides sont ignorés et signalés (eMule ne les partage pas).
+
+## Captures d'écran
+
+<p align="center">
+  <img src="docs/gui-main.png" width="420" alt="Fenêtre principale">
+  <img src="docs/gui-done.png" width="420" alt="Après un scan">
+</p>
+
+## Version portable (Windows)
+
+```
+powershell -ExecutionPolicy Bypass -File scripts/build-portable.ps1
+```
+
+Lance une compilation release et produit `portable/ed2k-vault-<version>-windows-x64/` (CLI, GUI, licence, READMEs) ainsi qu'un `.zip`. Le dossier `portable/` est ignoré par git. Rien à installer : copiez le dossier où vous voulez.
 
 ## Compilation
 

@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/icon.png" width="112" alt="ed2k-vault icon"></p>
+
 # ed2k-vault
 
 Generate ed2k links for a whole folder tree, **without eMule**. Point it at a folder (local, external drive, NAS/UNC) and get your files back as links named exactly like they are on disk: a tiny personal backup you can reload into eMule after a disaster.
@@ -44,6 +46,21 @@ The format is guessed from the extension of `--out` (`.html`, `.csv`, `.emulecol
 Exit codes: `0` success, `1` fatal error, `3` finished but some files could not be read, `130` cancelled with Ctrl-C (the output is complete up to that point; run the same command again to resume).
 
 Zero-byte files are skipped and reported (eMule does not share them).
+
+## Screenshots
+
+<p align="center">
+  <img src="docs/gui-main.png" width="420" alt="Main window">
+  <img src="docs/gui-done.png" width="420" alt="After a scan">
+</p>
+
+## Portable build (Windows)
+
+```
+powershell -ExecutionPolicy Bypass -File scripts/build-portable.ps1
+```
+
+Runs a release build and produces `portable/ed2k-vault-<version>-windows-x64/` (CLI, GUI, licence, readmes) plus a `.zip` of it. The `portable/` folder is git-ignored. Nothing needs installing: copy the folder anywhere.
 
 ## Build
 
