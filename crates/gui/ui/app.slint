@@ -72,6 +72,7 @@ export component MainWindow inherits Window {
     callback browse-root();
     callback browse-output();
     callback format-changed(int);
+    callback output-edited(string);
     callback start();
     callback cancel();
 
@@ -122,6 +123,7 @@ export component MainWindow inherits Window {
                             LineEdit {
                                 text <=> root.output-path;
                                 placeholder-text: "links.html";
+                                edited(text) => { root.output-edited(text); }
                                 enabled: !root.running;
                             }
                             Button {

@@ -70,6 +70,17 @@ pub fn with_format_extension(path: &str, format_index: usize) -> String {
         .into_owned()
 }
 
+/// Format implied by a typed output name; `.txt` is ambiguous, so it implies none.
+pub fn format_for_path(path: &str) -> Option<usize> {
+    let extension = Path::new(path.trim()).extension()?.to_str()?.to_lowercase();
+    match extension.as_str() {
+        "html" | "htm" => Some(1),
+        "csv" => Some(3),
+        "emulecollection" => Some(4),
+        _ => None,
+    }
+}
+
 impl Form {
     pub fn to_config(&self) -> Result<ScanConfig, String> {
         let root = self.root.trim();
@@ -174,6 +185,15 @@ mod tests {
         let mut form = valid();
         form.max_size = "huge".into();
         assert!(form.to_config().unwrap_err().starts_with("Maximum size"));
+    }
+
+    #[test]
+    fn typed_extension_selects_the_format() {
+        assert_eq!(format_for_path("a/links.HTML"), Some(1));
+        assert_eq!(format_for_path("x.csv"), Some(3));
+        assert_eq!(format_for_path("x.emulecollection"), Some(4));
+        assert_eq!(format_for_path("x.txt"), None);
+        assert_eq!(format_for_path("noext"), None);
     }
 
     #[test]

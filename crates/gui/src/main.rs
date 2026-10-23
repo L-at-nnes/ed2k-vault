@@ -14,7 +14,7 @@ use ed2k_vault_core::progress::Progress;
 use ed2k_vault_core::scan::{default_jobs, default_threads, scan};
 use slint::{ComponentHandle, ModelRc, SharedString, Timer, TimerMode, VecModel};
 
-use form::{with_format_extension, Form, FORMATS};
+use form::{format_for_path, with_format_extension, Form, FORMATS};
 
 slint::include_modules!();
 
@@ -99,6 +99,15 @@ fn main() -> Result<(), slint::PlatformError> {
                 .save_file();
             if let Some(path) = picked {
                 ui.set_output_path(path.to_string_lossy().as_ref().into());
+            }
+        }
+    });
+
+    ui.on_output_edited({
+        let ui = ui.as_weak();
+        move |text| {
+            if let (Some(ui), Some(index)) = (ui.upgrade(), format_for_path(&text)) {
+                ui.set_format_index(index as i32);
             }
         }
     });
