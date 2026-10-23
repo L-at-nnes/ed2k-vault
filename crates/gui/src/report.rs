@@ -46,8 +46,9 @@ pub fn headline(summary: &ScanSummary) -> String {
 }
 
 /// Details worth reading: warnings, skipped empty files and every error.
+/// Empty when the headline says it all.
 pub fn details(summary: &ScanSummary) -> String {
-    let mut lines = vec![headline(summary)];
+    let mut lines = Vec::new();
     for warning in &summary.warnings {
         lines.push(format!("Warning: {warning}"));
     }
@@ -128,6 +129,11 @@ mod tests {
     }
 
     #[test]
+    fn details_are_empty_for_a_clean_scan() {
+        assert_eq!(details(&summary()), "");
+    }
+
+    #[test]
     fn details_list_every_error() {
         let mut summary = summary();
         summary.empty_files = vec!["a".into()];
@@ -136,6 +142,7 @@ mod tests {
             message: "access denied".into(),
         }];
         let text = details(&summary);
+        assert!(!text.contains("Done in"));
         assert!(text.contains("1 empty file(s) skipped"));
         assert!(text.contains("1 error(s):\n  x.bin: access denied"));
     }
