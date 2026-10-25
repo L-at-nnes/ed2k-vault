@@ -6,6 +6,21 @@ Generate ed2k links for a whole folder tree, **without eMule**. Point it at a fo
 
 [Version française](README_FR.md)
 
+## Quick start (no programming needed)
+
+1. Open the **Releases** section on the right of the GitHub page and click the latest version.
+2. Under **Assets**, download the archive for your system:
+   - Windows: `ed2k-vault-vX.Y.Z-x86_64-pc-windows-msvc.zip`
+   - Linux: `ed2k-vault-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz`
+   - Mac with an Apple chip (M1 and later): `...aarch64-apple-darwin.tar.gz`
+   - Mac with an Intel chip: `...x86_64-apple-darwin.tar.gz`
+3. Extract the archive anywhere (nothing to install).
+4. Double-click **`ed2k-vault-gui.exe`** (on Linux and Mac, run `ed2k-vault-gui`). Windows may warn that the program is unsigned: click *More info*, then *Run anyway*.
+5. Click **Browse...** to pick the folder to scan, **Choose...** to pick where the result is saved, then **Start scan**.
+6. To reload your files in eMule, pick the *eMule collection* format and double-click the resulting file. With the *HTML page* format, open the page in a browser and click the links.
+
+The first scan reads every file, so a big disk takes a while. Next scans only read new or modified files.
+
 ## Features
 
 - Recursive scan with filters: extensions, name/path globs, excluded folders, min/max size, hidden files.

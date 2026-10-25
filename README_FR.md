@@ -6,6 +6,21 @@ Génère des liens ed2k pour toute une arborescence, **sans eMule**. Pointez un 
 
 [English version](README.md)
 
+## Démarrage rapide (sans connaissances techniques)
+
+1. Ouvrez la section **Releases** à droite de la page GitHub et cliquez sur la dernière version.
+2. Dans **Assets**, téléchargez l'archive correspondant à votre système :
+   - Windows : `ed2k-vault-vX.Y.Z-x86_64-pc-windows-msvc.zip`
+   - Linux : `ed2k-vault-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz`
+   - Mac avec puce Apple (M1 et suivants) : `...aarch64-apple-darwin.tar.gz`
+   - Mac avec puce Intel : `...x86_64-apple-darwin.tar.gz`
+3. Décompressez l'archive où vous voulez (rien à installer).
+4. Double-cliquez sur **`ed2k-vault-gui.exe`** (sous Linux et Mac, lancez `ed2k-vault-gui`). Windows peut prévenir que le programme n'est pas signé : cliquez sur *Informations complémentaires*, puis *Exécuter quand même*.
+5. Cliquez sur **Browse...** pour choisir le dossier à scanner, **Choose...** pour choisir où enregistrer le résultat, puis **Start scan**.
+6. Pour relancer vos fichiers dans eMule, choisissez le format *eMule collection* et double-cliquez sur le fichier obtenu. Avec le format *HTML page*, ouvrez la page dans un navigateur et cliquez sur les liens.
+
+Le premier scan lit tous les fichiers, donc un gros disque prend du temps. Les scans suivants ne lisent que les fichiers nouveaux ou modifiés.
+
 ## Fonctionnalités
 
 - Parcours récursif avec filtres : extensions, motifs glob sur le nom ou le chemin, dossiers exclus, taille min/max, fichiers cachés.
