@@ -7,6 +7,7 @@ pub mod error;
 pub mod filter;
 pub mod hasher;
 pub mod link;
+pub mod linklist;
 pub mod output;
 pub mod pathutil;
 pub mod progress;
