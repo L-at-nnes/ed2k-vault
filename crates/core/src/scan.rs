@@ -96,12 +96,19 @@ pub struct ScanSummary {
     pub elapsed: Duration,
 }
 
+/// A file whose digest is ready, as handed to the consumer of a scan.
+#[derive(Debug, Clone)]
+pub struct HashedFile {
+    pub path: PathBuf,
+    /// File name in NFC.
+    pub name: String,
+    pub digest: FileDigest,
+    /// The digest came from the cache.
+    pub cached: bool,
+}
+
 enum Outcome {
-    Hashed {
-        name: String,
-        digest: FileDigest,
-        cached: bool,
-    },
+    Hashed(HashedFile),
     Failed(ScanError),
     Empty(String),
     Cancelled,
@@ -130,11 +137,12 @@ fn process(ctx: &Context, file: FoundFile) -> Outcome {
                 .fetch_add(file.size, Ordering::Relaxed);
             ctx.progress.files_done.fetch_add(1, Ordering::Relaxed);
             ctx.progress.files_cached.fetch_add(1, Ordering::Relaxed);
-            return Outcome::Hashed {
+            return Outcome::Hashed(HashedFile {
                 name: nfc(&file.name),
+                path: file.path,
                 digest,
                 cached: true,
-            };
+            });
         }
     }
 
@@ -151,11 +159,12 @@ fn process(ctx: &Context, file: FoundFile) -> Outcome {
                 let _ = cache.put(&key, file.mtime_ns, &digest);
             }
             ctx.progress.files_done.fetch_add(1, Ordering::Relaxed);
-            Outcome::Hashed {
+            Outcome::Hashed(HashedFile {
                 name: nfc(&file.name),
+                path: file.path,
                 digest,
                 cached: false,
-            }
+            })
         }
         Err(Error::Cancelled) => Outcome::Cancelled,
         Err(e) => {
@@ -202,6 +211,32 @@ fn own_files(config: &ScanConfig) -> Vec<PathBuf> {
 /// finalized with what was written so far and the cache keeps every digest
 /// already computed, so running the same scan again resumes almost instantly.
 pub fn scan(config: &ScanConfig, progress: &Progress, cancel: &AtomicBool) -> Result<ScanSummary> {
+    let target = match &config.output {
+        Some(path) => Target::File(path),
+        None => Target::Stdout,
+    };
+    let mut writer = output::create(config.format, target, config.link)?;
+    let result = scan_with(config, progress, cancel, &mut |file| {
+        writer.write_entry(&Entry {
+            name: &file.name,
+            digest: &file.digest,
+        })
+    });
+    let finished = writer.finish();
+    let summary = result?;
+    finished.map_err(|e| Error::Invalid(format!("cannot finish output: {e}")))?;
+    Ok(summary)
+}
+
+/// Walks and hashes like [`scan`], but hands every file to `on_file` in walk
+/// order instead of writing links. `config.output` and `config.format` are
+/// ignored (the output file, if any, is still never hashed).
+pub fn scan_with(
+    config: &ScanConfig,
+    progress: &Progress,
+    cancel: &AtomicBool,
+    on_file: &mut dyn FnMut(&HashedFile) -> std::io::Result<()>,
+) -> Result<ScanSummary> {
     let started = Instant::now();
     let root = pathutil::extended(&config.root).map_err(|e| Error::io(&config.root, e))?;
     if !root.is_dir() {
@@ -226,12 +261,6 @@ pub fn scan(config: &ScanConfig, progress: &Progress, cancel: &AtomicBool) -> Re
         None => None,
     };
     let hasher = Hasher::new(config.hash_threads, config.link.aich)?;
-    let target = match &config.output {
-        Some(path) => Target::File(path),
-        None => Target::Stdout,
-    };
-    let mut writer = output::create(config.format, target, config.link)?;
-
     // The result and the cache may live inside the scanned folder: never hash them.
     let own_files = own_files(config);
 
@@ -307,28 +336,20 @@ pub fn scan(config: &ScanConfig, progress: &Progress, cancel: &AtomicBool) -> Re
             while let Some(outcome) = pending.remove(&next) {
                 next += 1;
                 match outcome {
-                    Outcome::Hashed {
-                        name,
-                        digest,
-                        cached,
-                    } if !stopped => {
-                        let entry = Entry {
-                            name: &name,
-                            digest: &digest,
-                        };
-                        if let Err(e) = writer.write_entry(&entry) {
+                    Outcome::Hashed(file) if !stopped => {
+                        if let Err(e) = on_file(&file) {
                             write_error = Some(Error::Invalid(format!("cannot write output: {e}")));
                             stopped = true;
                             cancel.store(true, Ordering::Relaxed);
                             continue;
                         }
                         summary.files_written += 1;
-                        summary.bytes += digest.size;
-                        if cached {
+                        summary.bytes += file.digest.size;
+                        if file.cached {
                             summary.files_cached += 1;
                         }
                     }
-                    Outcome::Hashed { .. } => {}
+                    Outcome::Hashed(_) => {}
                     Outcome::Failed(error) => summary.errors.push(error),
                     Outcome::Empty(path) => summary.empty_files.push(path),
                     Outcome::Cancelled => stopped = true,
@@ -337,7 +358,6 @@ pub fn scan(config: &ScanConfig, progress: &Progress, cancel: &AtomicBool) -> Re
         }
     });
 
-    let finished = writer.finish();
     if let Some(cache) = &cache {
         if let Err(e) = cache.flush() {
             summary.warnings.push(format!("cache not saved: {e}"));
@@ -346,7 +366,6 @@ pub fn scan(config: &ScanConfig, progress: &Progress, cancel: &AtomicBool) -> Re
     if let Some(e) = write_error {
         return Err(e);
     }
-    finished.map_err(|e| Error::Invalid(format!("cannot finish output: {e}")))?;
     summary.cancelled = cancel.load(Ordering::Relaxed);
     summary.elapsed = started.elapsed();
     Ok(summary)
@@ -482,6 +501,41 @@ mod tests {
         run(&config);
         let text = fs::read_to_string(out.path()).unwrap();
         assert!(text.contains("\"\u{e9}t\u{e9}.txt\""));
+    }
+
+    #[test]
+    fn scan_with_hands_every_file_to_the_callback_in_order() {
+        let dir = tree();
+        let mut config = config(dir.path(), Path::new("unused"));
+        config.output = None;
+        let mut seen = Vec::new();
+        let summary = scan_with(
+            &config,
+            &Progress::default(),
+            &AtomicBool::new(false),
+            &mut |file| {
+                seen.push((file.name.clone(), file.path.clone(), file.digest.size));
+                Ok(())
+            },
+        )
+        .unwrap();
+        let names: Vec<&str> = seen.iter().map(|(n, _, _)| n.as_str()).collect();
+        assert_eq!(names, ["a.bin", "b file.txt", "c.txt", "d.txt"]);
+        assert!(seen.iter().all(|(_, path, _)| path.is_file()));
+        assert_eq!(summary.files_written, 4);
+    }
+
+    #[test]
+    fn callback_errors_abort_the_scan() {
+        let dir = tree();
+        let config = config(dir.path(), Path::new("unused"));
+        let result = scan_with(
+            &config,
+            &Progress::default(),
+            &AtomicBool::new(false),
+            &mut |_| Err(std::io::Error::other("boom")),
+        );
+        assert!(result.is_err());
     }
 
     #[test]
