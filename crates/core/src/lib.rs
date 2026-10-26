@@ -2,6 +2,7 @@
 
 pub mod aich;
 pub mod cache;
+pub mod compare;
 pub mod ed2k;
 pub mod error;
 pub mod filter;
