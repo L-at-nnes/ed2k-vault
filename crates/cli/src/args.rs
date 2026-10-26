@@ -19,6 +19,8 @@ pub struct Cli {
 pub enum Command {
     /// Hash every file below a folder and write the ed2k links
     Scan(Box<ScanArgs>),
+    /// Compare a saved list of links with a folder and restore the file names
+    Compare(Box<CompareArgs>),
     /// Open the graphical interface
     Gui,
 }
@@ -46,6 +48,40 @@ pub struct ScanArgs {
 
     #[command(flatten)]
     pub options: SharedOptions,
+}
+
+#[derive(Debug, Args)]
+pub struct CompareArgs {
+    /// Saved list: any text, HTML, CSV or URL-tag file holding ed2k links, or a .emulecollection
+    pub list: PathBuf,
+
+    /// Folder whose files are matched against the list (by hash, not by name)
+    pub root: PathBuf,
+
+    /// Really rename the files that have another name in the list (default: only report)
+    #[arg(long)]
+    pub rename: bool,
+
+    /// Write the links of the listed files missing from the folder (ready to re-download)
+    #[arg(long)]
+    pub missing_out: Option<PathBuf>,
+
+    /// Write the full report (every rename, skipped, missing and unlisted file)
+    #[arg(long)]
+    pub report: Option<PathBuf>,
+
+    #[command(flatten)]
+    pub options: SharedOptions,
+}
+
+impl CompareArgs {
+    /// Scan settings for the folder: only the hashes are needed.
+    pub fn into_config(self) -> ScanConfig {
+        let mut config = ScanConfig::new(self.root);
+        self.options.apply(&mut config);
+        config.link.aich = false;
+        config
+    }
 }
 
 /// Filters, performance and cache settings shared by the commands that walk a folder.
@@ -166,7 +202,7 @@ mod tests {
         full.extend_from_slice(args);
         match Cli::try_parse_from(full).unwrap().command {
             Command::Scan(args) => args.into_config(),
-            Command::Gui => panic!("expected scan"),
+            _ => panic!("expected scan"),
         }
     }
 
@@ -217,6 +253,41 @@ mod tests {
         assert_eq!(config.filters.min_size, Some(1 << 20));
         assert!(config.filters.include_hidden);
         assert!(config.cache.is_none());
+    }
+
+    #[test]
+    fn compare_takes_a_list_and_a_folder() {
+        let cli = Cli::try_parse_from([
+            "ed2k-vault",
+            "compare",
+            "backup.txt",
+            "D:/Share",
+            "--rename",
+            "--missing-out",
+            "missing.txt",
+            "--exclude",
+            "*.tmp",
+            "--no-cache",
+        ])
+        .unwrap();
+        let Command::Compare(args) = cli.command else {
+            panic!("expected compare");
+        };
+        assert!(args.rename);
+        assert_eq!(args.list, PathBuf::from("backup.txt"));
+        assert_eq!(args.missing_out, Some(PathBuf::from("missing.txt")));
+        let config = args.into_config();
+        assert_eq!(config.filters.exclude, ["*.tmp"]);
+        assert!(config.cache.is_none() && !config.link.aich);
+    }
+
+    #[test]
+    fn compare_does_not_rename_unless_asked() {
+        let cli = Cli::try_parse_from(["ed2k-vault", "compare", "l.txt", "d"]).unwrap();
+        let Command::Compare(args) = cli.command else {
+            panic!("expected compare");
+        };
+        assert!(!args.rename);
     }
 
     #[test]

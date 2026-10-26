@@ -9,10 +9,12 @@ use std::thread;
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use ed2k_vault_core::compare::{apply, compare};
+use ed2k_vault_core::linklist;
 use ed2k_vault_core::progress::Progress;
 use ed2k_vault_core::scan::scan;
 
-use args::{Cli, Command as Subcommand, ScanArgs};
+use args::{Cli, Command as Subcommand, CompareArgs, ScanArgs};
 
 /// The scan finished but some files could not be read.
 const EXIT_PARTIAL: u8 = 3;
@@ -23,6 +25,7 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.command {
         Subcommand::Scan(args) => run_scan(*args),
+        Subcommand::Compare(args) => run_compare(*args),
         Subcommand::Gui => run_gui(),
     };
     match result {
@@ -34,10 +37,11 @@ fn main() -> ExitCode {
     }
 }
 
-fn run_scan(args: ScanArgs) -> Result<u8> {
-    let quiet = args.options.quiet;
-    let config = args.into_config();
-
+/// Runs `job` with Ctrl-C wired to its cancel flag and a progress bar on stderr.
+fn with_progress<T: Send>(
+    quiet: bool,
+    job: impl FnOnce(&Progress, &AtomicBool) -> Result<T> + Send,
+) -> Result<T> {
     let cancel = Arc::new(AtomicBool::new(false));
     {
         let cancel = Arc::clone(&cancel);
@@ -46,7 +50,7 @@ fn run_scan(args: ScanArgs) -> Result<u8> {
             if cancel.swap(true, Ordering::Relaxed) {
                 std::process::exit(i32::from(EXIT_CANCELLED));
             }
-            eprintln!("\ninterrupted, finishing the output (Ctrl-C again to abort)...");
+            eprintln!("\ninterrupted, finishing cleanly (Ctrl-C again to abort)...");
         })
         .context("cannot install the Ctrl-C handler")?;
     }
@@ -54,13 +58,21 @@ fn run_scan(args: ScanArgs) -> Result<u8> {
     let progress = Progress::default();
     let stop = AtomicBool::new(false);
     let show_progress = !quiet && std::io::stderr().is_terminal();
-    let summary = thread::scope(|scope| {
+    thread::scope(|scope| {
         if show_progress {
             scope.spawn(|| report::watch(&progress, &stop));
         }
-        let result = scan(&config, &progress, &cancel);
+        let result = job(&progress, &cancel);
         stop.store(true, Ordering::Relaxed);
         result
+    })
+}
+
+fn run_scan(args: ScanArgs) -> Result<u8> {
+    let quiet = args.options.quiet;
+    let config = args.into_config();
+    let summary = with_progress(quiet, |progress, cancel| {
+        Ok(scan(&config, progress, cancel)?)
     })?;
 
     if !quiet {
@@ -69,6 +81,50 @@ fn run_scan(args: ScanArgs) -> Result<u8> {
     Ok(if summary.cancelled {
         EXIT_CANCELLED
     } else if !summary.errors.is_empty() {
+        EXIT_PARTIAL
+    } else {
+        0
+    })
+}
+
+fn run_compare(args: CompareArgs) -> Result<u8> {
+    let quiet = args.options.quiet;
+    let rename = args.rename;
+    let missing_out = args.missing_out.clone();
+    let report_path = args.report.clone();
+    let list = linklist::load(&args.list)?;
+    if list.is_empty() {
+        anyhow::bail!("no ed2k file link found in {}", args.list.display());
+    }
+    let config = args.into_config();
+
+    let report = with_progress(quiet, |progress, cancel| {
+        Ok(compare(&list, &config, progress, cancel)?)
+    })?;
+    if report.scan.cancelled {
+        // An unfinished scan would make every unseen file look missing.
+        eprintln!("cancelled: nothing was renamed or written");
+        return Ok(EXIT_CANCELLED);
+    }
+
+    let applied = rename.then(|| apply(&report.renames));
+    if !quiet {
+        report::print_compare(&report, applied.as_ref());
+    }
+    if let Some(path) = missing_out {
+        let links: String = report
+            .missing
+            .iter()
+            .map(|entry| format!("{}\n", entry.link))
+            .collect();
+        std::fs::write(&path, links).with_context(|| format!("cannot write {}", path.display()))?;
+    }
+    if let Some(path) = report_path {
+        std::fs::write(&path, report::compare_report_text(&report))
+            .with_context(|| format!("cannot write {}", path.display()))?;
+    }
+    let failed = applied.is_some_and(|outcome| !outcome.failed.is_empty());
+    Ok(if failed || !report.scan.errors.is_empty() {
         EXIT_PARTIAL
     } else {
         0

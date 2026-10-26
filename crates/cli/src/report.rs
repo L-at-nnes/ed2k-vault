@@ -4,6 +4,7 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+use ed2k_vault_core::compare::{ApplyOutcome, CompareReport};
 use ed2k_vault_core::progress::Progress;
 use ed2k_vault_core::scan::ScanSummary;
 use indicatif::{HumanBytes, ProgressBar, ProgressDrawTarget, ProgressStyle};
@@ -97,5 +98,122 @@ pub fn print_summary(summary: &ScanSummary) {
         if summary.errors.len() > MAX_ERRORS_SHOWN {
             eprintln!("  ... and {} more", summary.errors.len() - MAX_ERRORS_SHOWN);
         }
+    }
+}
+
+/// Renames shown on screen before the rest is only counted.
+const MAX_RENAMES_SHOWN: usize = 20;
+
+/// Prints what a comparison found. `applied` is `None` for a dry run.
+pub fn print_compare(report: &CompareReport, applied: Option<&ApplyOutcome>) {
+    let matched = report.identical as usize + report.renames.len() + report.skipped.len();
+    println!(
+        "{matched} files of the folder are in the list: {} already named right, {} to rename, {} left alone.",
+        report.identical,
+        report.renames.len(),
+        report.skipped.len()
+    );
+    println!(
+        "{} listed files are not in the folder, {} files of the folder are not in the list.",
+        report.missing.len(),
+        report.unlisted.len()
+    );
+    for plan in report.renames.iter().take(MAX_RENAMES_SHOWN) {
+        println!("  {} -> {}", plan.old_name, plan.new_name);
+    }
+    if report.renames.len() > MAX_RENAMES_SHOWN {
+        println!(
+            "  ... and {} more",
+            report.renames.len() - MAX_RENAMES_SHOWN
+        );
+    }
+    for skipped in report.skipped.iter().take(MAX_RENAMES_SHOWN) {
+        println!("  skipped {}: {}", skipped.path, skipped.reason);
+    }
+    match applied {
+        None if !report.renames.is_empty() => {
+            println!("Nothing was renamed. Add --rename to apply the renames above.");
+        }
+        None => {}
+        Some(outcome) => {
+            println!("{} renamed.", outcome.renamed);
+            for failed in &outcome.failed {
+                println!("  could not rename {}: {}", failed.path, failed.reason);
+            }
+        }
+    }
+    if !report.scan.errors.is_empty() {
+        println!(
+            "{} files or folders could not be read: the list of missing files may be incomplete.",
+            report.scan.errors.len()
+        );
+        for error in report.scan.errors.iter().take(MAX_ERRORS_SHOWN) {
+            println!("  {}: {}", error.path, error.message);
+        }
+    }
+}
+
+/// The full report as text, for `--report`.
+pub fn compare_report_text(report: &CompareReport) -> String {
+    let mut text = String::new();
+    text.push_str(&format!("== To rename ({})\n", report.renames.len()));
+    for plan in &report.renames {
+        text.push_str(&format!("{} -> {}\n", plan.from.display(), plan.new_name));
+    }
+    text.push_str(&format!("\n== Left alone ({})\n", report.skipped.len()));
+    for skipped in &report.skipped {
+        text.push_str(&format!("{}: {}\n", skipped.path, skipped.reason));
+    }
+    text.push_str(&format!(
+        "\n== In the list, not in the folder ({})\n",
+        report.missing.len()
+    ));
+    for entry in &report.missing {
+        text.push_str(&format!("{}\n", entry.link));
+    }
+    text.push_str(&format!(
+        "\n== In the folder, not in the list ({})\n",
+        report.unlisted.len()
+    ));
+    for path in &report.unlisted {
+        text.push_str(&format!("{path}\n"));
+    }
+    text
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ed2k_vault_core::compare::{RenamePlan, Skipped};
+    use ed2k_vault_core::linklist::ListEntry;
+    use std::path::PathBuf;
+
+    #[test]
+    fn full_report_lists_every_section() {
+        let report = CompareReport {
+            renames: vec![RenamePlan {
+                from: PathBuf::from("d/x1"),
+                to: PathBuf::from("d/Album.cbz"),
+                old_name: "x1".into(),
+                new_name: "Album.cbz".into(),
+            }],
+            skipped: vec![Skipped {
+                path: "d/copy".into(),
+                reason: "same content".into(),
+            }],
+            missing: vec![ListEntry {
+                name: "lost.cbz".into(),
+                size: 1,
+                hash: [0; 16],
+                link: "ed2k://|file|lost.cbz|1|00000000000000000000000000000000|/".into(),
+            }],
+            unlisted: vec!["d/other.txt".into()],
+            ..CompareReport::default()
+        };
+        let text = compare_report_text(&report);
+        assert!(text.contains("== To rename (1)\nd/x1 -> Album.cbz"));
+        assert!(text.contains("d/copy: same content"));
+        assert!(text.contains("== In the list, not in the folder (1)\ned2k://|file|lost.cbz"));
+        assert!(text.contains("== In the folder, not in the list (1)\nd/other.txt"));
     }
 }
