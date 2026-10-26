@@ -112,3 +112,82 @@ fn collection_needs_an_output_file() {
     let output = vault(&[path(tree.path()), "--format", "collection", "--no-cache"]);
     assert_eq!(output.status.code(), Some(1));
 }
+
+fn compare(args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_ed2k-vault"))
+        .arg("compare")
+        .args(args)
+        .output()
+        .unwrap()
+}
+
+/// A folder, its backup list, and the folder after the names were lost.
+fn lost_names() -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("Album 01.cbz"), b"first file").unwrap();
+    fs::write(dir.path().join("Album 02.cbz"), b"second file").unwrap();
+    fs::write(dir.path().join("Album 03.cbz"), b"third file").unwrap();
+    let list = dir.path().join("..").join(format!(
+        "ed2k-vault-list-{}.txt",
+        dir.path().file_name().unwrap().to_string_lossy()
+    ));
+    let output = vault(&[path(dir.path()), "--no-cache", "--quiet"]);
+    fs::write(&list, output.stdout).unwrap();
+    fs::rename(dir.path().join("Album 01.cbz"), dir.path().join("scan-1")).unwrap();
+    fs::remove_file(dir.path().join("Album 03.cbz")).unwrap();
+    (dir, list)
+}
+
+#[test]
+fn compare_reports_without_touching_anything_by_default() {
+    let (dir, list) = lost_names();
+    let output = compare(&[path(&list), path(dir.path()), "--no-cache", "--quiet"]);
+    let _ = fs::remove_file(&list);
+    assert!(output.status.success());
+    assert!(dir.path().join("scan-1").is_file());
+    assert!(!dir.path().join("Album 01.cbz").exists());
+}
+
+#[test]
+fn compare_rename_restores_names_and_exports_missing_links() {
+    let (dir, list) = lost_names();
+    let missing = dir.path().join("..").join(format!(
+        "ed2k-vault-missing-{}.txt",
+        dir.path().file_name().unwrap().to_string_lossy()
+    ));
+    let output = compare(&[
+        path(&list),
+        path(dir.path()),
+        "--no-cache",
+        "--rename",
+        "--missing-out",
+        path(&missing),
+    ]);
+    let _ = fs::remove_file(&list);
+    let missing_links = fs::read_to_string(&missing).unwrap_or_default();
+    let _ = fs::remove_file(&missing);
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(output.status.success(), "{stdout}");
+    assert!(stdout.contains("scan-1 -> Album 01.cbz"));
+    assert!(stdout.contains("1 renamed"));
+    assert_eq!(
+        fs::read(dir.path().join("Album 01.cbz")).unwrap(),
+        b"first file"
+    );
+    assert!(!dir.path().join("scan-1").exists());
+    assert_eq!(missing_links.lines().count(), 1);
+    assert!(missing_links.contains("Album%2003.cbz"));
+}
+
+#[test]
+fn compare_fails_on_a_file_without_links() {
+    let dir = tempfile::tempdir().unwrap();
+    let empty = dir.path().join("nothing.txt");
+    fs::write(&empty, "no link in here").unwrap();
+    let output = compare(&[path(&empty), path(dir.path()), "--no-cache"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8(output.stderr)
+        .unwrap()
+        .contains("no ed2k file link"));
+}
