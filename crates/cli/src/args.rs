@@ -44,6 +44,13 @@ pub struct ScanArgs {
     #[arg(long)]
     pub no_aich: bool,
 
+    #[command(flatten)]
+    pub options: SharedOptions,
+}
+
+/// Filters, performance and cache settings shared by the commands that walk a folder.
+#[derive(Debug, Args)]
+pub struct SharedOptions {
     /// Only keep these extensions, comma separated (mkv,avi)
     #[arg(long, value_delimiter = ',')]
     pub include_ext: Vec<String>,
@@ -106,14 +113,10 @@ fn format_from_path(path: &Path) -> Format {
     ext.parse().unwrap_or(Format::Links)
 }
 
-impl ScanArgs {
-    pub fn into_config(self) -> ScanConfig {
+impl SharedOptions {
+    /// Applies the filters, thread counts and cache choice to `config`.
+    pub fn apply(self, config: &mut ScanConfig) {
         let hash_threads = self.threads.unwrap_or_else(default_threads).max(1);
-        let format = self
-            .format
-            .or_else(|| self.out.as_deref().map(format_from_path))
-            .unwrap_or(Format::Links);
-        let mut config = ScanConfig::new(self.root);
         config.filters = FilterConfig {
             include_ext: self.include_ext,
             exclude_ext: self.exclude_ext,
@@ -128,17 +131,28 @@ impl ScanArgs {
             .jobs
             .unwrap_or_else(|| default_jobs(hash_threads))
             .max(1);
+        if self.no_cache {
+            config.cache = None;
+        } else if let Some(path) = self.cache {
+            config.cache = Some(path);
+        }
+    }
+}
+
+impl ScanArgs {
+    pub fn into_config(self) -> ScanConfig {
+        let format = self
+            .format
+            .or_else(|| self.out.as_deref().map(format_from_path))
+            .unwrap_or(Format::Links);
+        let mut config = ScanConfig::new(self.root);
+        self.options.apply(&mut config);
         config.format = format;
         config.link = LinkOptions {
             hashset: self.hashset,
             aich: !self.no_aich,
         };
         config.output = self.out;
-        if self.no_cache {
-            config.cache = None;
-        } else if let Some(path) = self.cache {
-            config.cache = Some(path);
-        }
         config
     }
 }

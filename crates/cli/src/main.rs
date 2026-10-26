@@ -35,7 +35,7 @@ fn main() -> ExitCode {
 }
 
 fn run_scan(args: ScanArgs) -> Result<u8> {
-    let quiet = args.quiet;
+    let quiet = args.options.quiet;
     let config = args.into_config();
 
     let cancel = Arc::new(AtomicBool::new(false));
