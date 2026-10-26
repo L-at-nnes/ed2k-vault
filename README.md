@@ -62,6 +62,26 @@ Exit codes: `0` success, `1` fatal error, `3` finished but some files could not 
 
 Zero-byte files are skipped and reported (eMule does not share them).
 
+## Restore file names from a saved list
+
+Lost the names of your files (bad copy, renamed in bulk, recovered disk)? Keep the list made by a scan and let ed2k-vault match your files against it. Files are matched on **size and ed2k hash**, never on name, so a file gets its listed name back whatever it is called now.
+
+```
+ed2k-vault compare backup.html D:\Share              # report only, nothing is touched
+ed2k-vault compare backup.html D:\Share --rename     # really rename
+ed2k-vault compare backup.emulecollection D:\Share --missing-out to-download.txt
+```
+
+- The list can be any file holding ed2k links (plain, HTML, CSV, URL tags) or a `.emulecollection`.
+- Files are renamed in place, in their own folder. Nothing is ever overwritten: if the listed name is already taken, or if two files have the same content, the file is left alone and reported.
+- `--missing-out FILE` saves the links of the listed files that are not in the folder, ready to paste into eMule.
+- `--report FILE` writes the full report (every rename, skipped, missing and unlisted file).
+- Names are cleaned only for characters the file system forbids (for example `:` or `?` on Windows).
+- If you press Ctrl-C, nothing is renamed or written, since an unfinished scan would make every unseen file look missing.
+- Same filters, `--threads`, `--jobs` and cache options as `scan`. Only files whose content is identical can be matched.
+
+The GUI does not have this feature yet.
+
 ## Screenshots
 
 <p align="center">

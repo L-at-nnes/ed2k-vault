@@ -62,6 +62,26 @@ Codes de sortie : `0` succès, `1` erreur fatale, `3` terminé mais certains fic
 
 Les fichiers vides sont ignorés et signalés (eMule ne les partage pas).
 
+## Retrouver les noms de fichiers depuis une liste sauvegardée
+
+Vous avez perdu les noms de vos fichiers (mauvaise copie, renommage en masse, disque récupéré) ? Gardez la liste produite par un scan et laissez ed2k-vault y comparer vos fichiers. Les fichiers sont reconnus par leur **taille et leur hash ed2k**, jamais par leur nom : un fichier retrouve son nom de la liste quel que soit son nom actuel.
+
+```
+ed2k-vault compare backup.html D:\Partage              # rapport seul, rien n'est modifié
+ed2k-vault compare backup.html D:\Partage --rename     # renomme pour de bon
+ed2k-vault compare backup.emulecollection D:\Partage --missing-out a-telecharger.txt
+```
+
+- La liste peut être n'importe quel fichier contenant des liens ed2k (simple, HTML, CSV, balises URL) ou un `.emulecollection`.
+- Les fichiers sont renommés sur place, dans leur propre dossier. Rien n'est jamais écrasé : si le nom de la liste est déjà pris, ou si deux fichiers ont le même contenu, le fichier est laissé tel quel et signalé.
+- `--missing-out FICHIER` enregistre les liens des fichiers de la liste absents du dossier, prêts à coller dans eMule.
+- `--report FICHIER` écrit le rapport complet (chaque renommage, fichier ignoré, manquant ou hors liste).
+- Les noms ne sont modifiés que pour les caractères interdits par le système de fichiers (par exemple `:` ou `?` sous Windows).
+- Avec Ctrl-C, rien n'est renommé ni écrit, car un scan inachevé ferait passer tous les fichiers non vus pour manquants.
+- Mêmes filtres, `--threads`, `--jobs` et options de cache que `scan`. Seuls les fichiers au contenu identique peuvent être reconnus.
+
+L'interface graphique n'a pas encore cette fonction.
+
 ## Captures d'écran
 
 <p align="center">
