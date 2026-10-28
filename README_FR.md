@@ -62,6 +62,22 @@ Codes de sortie : `0` succès, `1` erreur fatale, `3` terminé mais certains fic
 
 Les fichiers vides sont ignorés et signalés (eMule ne les partage pas).
 
+## Garder la structure des dossiers
+
+Par défaut, un scan donne une liste à plat. Trois options conservent l'emplacement des fichiers (aussi disponibles en cases à cocher dans l'interface, sous *Folder structure*) :
+
+```
+ed2k-vault scan D:\Partage --out liens.html --group-by-folder
+ed2k-vault scan D:\Partage --out collections --split-collections
+ed2k-vault scan D:\Partage --out liens.txt --tree structure.txt
+```
+
+- `--group-by-folder` : la page HTML affiche un titre par dossier (`--- A --- / Akim`) avant ses liens, et le CSV reçoit une colonne `folder`. Les liens simples et les balises URL restent des listes pures.
+- `--split-collections` : un `.emulecollection` par dossier, écrit dans le dossier `--out` et nommé d'après le chemin du dossier (`--- A --- - Akim.emulecollection`, les fichiers de la racine vont dans `<nom de la racine>.emulecollection`).
+- `--tree FICHIER` : l'arborescence complète en texte, avec le nombre de fichiers et la taille directement contenus dans chaque dossier. **Les dossiers vides n'apparaissent que là** : c'est la trace complète de la structure.
+
+Dans toutes les sorties, les fichiers d'un dossier sont maintenant regroupés, avant ses sous-dossiers (chaque niveau trié par nom).
+
 ## Retrouver les noms de fichiers depuis une liste sauvegardée
 
 Vous avez perdu les noms de vos fichiers (mauvaise copie, renommage en masse, disque récupéré) ? Gardez la liste produite par un scan et laissez ed2k-vault y comparer vos fichiers. Les fichiers sont reconnus par leur **taille et leur hash ed2k**, jamais par leur nom : un fichier retrouve son nom de la liste quel que soit son nom actuel.

@@ -62,6 +62,22 @@ Exit codes: `0` success, `1` fatal error, `3` finished but some files could not 
 
 Zero-byte files are skipped and reported (eMule does not share them).
 
+## Keep the folder structure
+
+A scan is a flat list by default. Three options keep track of where files live (also available as checkboxes in the GUI, under *Folder structure*):
+
+```
+ed2k-vault scan D:\Share --out links.html --group-by-folder
+ed2k-vault scan D:\Share --out collections --split-collections
+ed2k-vault scan D:\Share --out links.txt --tree structure.txt
+```
+
+- `--group-by-folder`: the HTML page gets a heading per folder (`--- A --- / Akim`) before its links, and the CSV gets a `folder` column. Plain links and URL tags stay pure lists.
+- `--split-collections`: one `.emulecollection` per folder, written into the `--out` folder and named after the folder path (`--- A --- - Akim.emulecollection`, files of the root go in `<root name>.emulecollection`).
+- `--tree FILE`: the full folder tree as text, with the number of files and size directly inside each folder. **Empty folders appear here only**, so this is the complete trace of the structure.
+
+In every output, the files of a folder now come together, before its sub-folders (each level sorted by name).
+
 ## Restore file names from a saved list
 
 Lost the names of your files (bad copy, renamed in bulk, recovered disk)? Keep the list made by a scan and let ed2k-vault match your files against it. Files are matched on **size and ed2k hash**, never on name, so a file gets its listed name back whatever it is called now.
