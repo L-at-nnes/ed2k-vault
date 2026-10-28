@@ -1288,7 +1288,7 @@ checksum = "edf234dd1594d6dd434a8fb8cada51ddbbc593e40e4a01556a0b31c62da2775b"
 
 [[package]]
 name = "ed2k-vault"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1301,7 +1301,7 @@ dependencies = [
 
 [[package]]
 name = "ed2k-vault-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "crossbeam-channel",
  "dirs",
@@ -1318,7 +1318,7 @@ dependencies = [
 
 [[package]]
 name = "ed2k-vault-gui"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "ed2k-vault-core",
  "rfd",
