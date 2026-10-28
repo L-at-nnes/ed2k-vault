@@ -334,6 +334,7 @@ mod tests {
             };
             writer
                 .write_entry(&Entry {
+                    folder: "",
                     name,
                     digest: &digest,
                 })

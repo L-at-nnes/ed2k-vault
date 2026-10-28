@@ -19,9 +19,10 @@ use crate::error::{Error, Result};
 use crate::filter::{FilterConfig, Filters};
 use crate::hasher::{FileDigest, Hasher};
 use crate::link::LinkOptions;
-use crate::output::{self, Entry, Format, Target};
+use crate::output::{self, Entry, Format, Layout, Target};
 use crate::pathutil;
 use crate::progress::Progress;
+use crate::tree::TreeBuilder;
 use crate::walk::{walk, FoundFile, WalkItem};
 
 #[derive(Debug, Clone)]
@@ -39,6 +40,10 @@ pub struct ScanConfig {
     pub output: Option<PathBuf>,
     /// `None` disables the cache.
     pub cache: Option<PathBuf>,
+    /// Folder-aware output options (headings, one collection per folder).
+    pub layout: Layout,
+    /// Also write the folder structure as a text tree to this file.
+    pub tree: Option<PathBuf>,
 }
 
 impl ScanConfig {
@@ -56,6 +61,8 @@ impl ScanConfig {
             },
             output: None,
             cache: crate::cache::default_path(),
+            layout: Layout::default(),
+            tree: None,
         }
     }
 }
@@ -100,6 +107,8 @@ pub struct ScanSummary {
 #[derive(Debug, Clone)]
 pub struct HashedFile {
     pub path: PathBuf,
+    /// Folder below the scanned root, `/` separated (empty for the root).
+    pub folder: String,
     /// File name in NFC.
     pub name: String,
     pub digest: FileDigest,
@@ -111,6 +120,7 @@ enum Outcome {
     Hashed(HashedFile),
     Failed(ScanError),
     Empty(String),
+    Folder(String),
     Cancelled,
 }
 
@@ -126,6 +136,14 @@ fn nfc(name: &str) -> String {
     name.nfc().collect()
 }
 
+/// Folder part of a `/` separated relative path.
+fn folder_of(relative: &str) -> String {
+    relative
+        .rsplit_once('/')
+        .map(|(folder, _)| folder.to_string())
+        .unwrap_or_default()
+}
+
 fn process(ctx: &Context, file: FoundFile) -> Outcome {
     let key = pathutil::display(&file.path);
     ctx.progress.set_last_file(&file.relative);
@@ -139,6 +157,7 @@ fn process(ctx: &Context, file: FoundFile) -> Outcome {
             ctx.progress.files_cached.fetch_add(1, Ordering::Relaxed);
             return Outcome::Hashed(HashedFile {
                 name: nfc(&file.name),
+                folder: folder_of(&file.relative),
                 path: file.path,
                 digest,
                 cached: true,
@@ -161,6 +180,7 @@ fn process(ctx: &Context, file: FoundFile) -> Outcome {
             ctx.progress.files_done.fetch_add(1, Ordering::Relaxed);
             Outcome::Hashed(HashedFile {
                 name: nfc(&file.name),
+                folder: folder_of(&file.relative),
                 path: file.path,
                 digest,
                 cached: false,
@@ -188,7 +208,12 @@ fn process(ctx: &Context, file: FoundFile) -> Outcome {
 /// SQLite side files).
 fn own_files(config: &ScanConfig) -> Vec<PathBuf> {
     let mut files = Vec::new();
-    for path in config.output.iter().chain(config.cache.iter()) {
+    for path in config
+        .output
+        .iter()
+        .chain(config.cache.iter())
+        .chain(config.tree.iter())
+    {
         if let Ok(canonical) = pathutil::extended(path) {
             files.push(canonical);
         }
@@ -215,9 +240,10 @@ pub fn scan(config: &ScanConfig, progress: &Progress, cancel: &AtomicBool) -> Re
         Some(path) => Target::File(path),
         None => Target::Stdout,
     };
-    let mut writer = output::create(config.format, target, config.link)?;
+    let mut writer = output::create_with(config.format, target, config.link, &config.layout)?;
     let result = scan_with(config, progress, cancel, &mut |file| {
         writer.write_entry(&Entry {
+            folder: &file.folder,
             name: &file.name,
             digest: &file.digest,
         })
@@ -275,6 +301,7 @@ pub fn scan_with(
     };
 
     let mut write_error: Option<Error> = None;
+    let mut tree_text: Option<TreeBuilder> = None;
     thread::scope(|scope| {
         let producer_results = result_tx.clone();
         let root = &root;
@@ -294,6 +321,9 @@ pub fn scan_with(
                         if work_tx.send((seq, file)).is_err() {
                             break;
                         }
+                    }
+                    WalkItem::Dir { relative } => {
+                        let _ = producer_results.send((seq, Outcome::Folder(relative)));
                     }
                     WalkItem::Empty(path) => {
                         let outcome = Outcome::Empty(pathutil::display(&path));
@@ -331,6 +361,7 @@ pub fn scan_with(
         let mut pending: BTreeMap<u64, Outcome> = BTreeMap::new();
         let mut next = 0u64;
         let mut stopped = false;
+        let mut tree = TreeBuilder::default();
         for (seq, outcome) in result_rx {
             pending.insert(seq, outcome);
             while let Some(outcome) = pending.remove(&next) {
@@ -343,6 +374,7 @@ pub fn scan_with(
                             cancel.store(true, Ordering::Relaxed);
                             continue;
                         }
+                        tree.add_file(&file.folder, file.digest.size);
                         summary.files_written += 1;
                         summary.bytes += file.digest.size;
                         if file.cached {
@@ -352,12 +384,23 @@ pub fn scan_with(
                     Outcome::Hashed(_) => {}
                     Outcome::Failed(error) => summary.errors.push(error),
                     Outcome::Empty(path) => summary.empty_files.push(path),
+                    Outcome::Folder(relative) => tree.add_folder(&relative),
                     Outcome::Cancelled => stopped = true,
                 }
             }
         }
+        tree_text = Some(tree);
     });
 
+    if let (Some(path), Some(tree)) = (&config.tree, tree_text) {
+        let root_name = root
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| pathutil::display(&root));
+        if let Err(e) = std::fs::write(path, tree.render(&root_name)) {
+            summary.warnings.push(format!("folder tree not saved: {e}"));
+        }
+    }
     if let Some(cache) = &cache {
         if let Err(e) = cache.flush() {
             summary.warnings.push(format!("cache not saved: {e}"));
@@ -536,6 +579,50 @@ mod tests {
             &mut |_| Err(std::io::Error::other("boom")),
         );
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn tree_file_lists_every_folder_with_its_counts() {
+        let dir = tree();
+        fs::create_dir(dir.path().join("hollow")).unwrap();
+        let out = tempfile::NamedTempFile::new().unwrap();
+        let tree_file = tempfile::NamedTempFile::new().unwrap();
+        let mut config = config(dir.path(), out.path());
+        config.tree = Some(tree_file.path().to_path_buf());
+        run(&config);
+
+        let text = fs::read_to_string(tree_file.path()).unwrap();
+        assert!(text
+            .lines()
+            .next()
+            .unwrap()
+            .ends_with("/  [2 files, 4.9 KiB]"));
+        assert!(text.contains(
+            "
+  sub/  [1 file, 5 B]"
+        ));
+        assert!(text.contains(
+            "
+    deeper/  [1 file, 6 B]"
+        ));
+        assert!(text.contains("  hollow/  [0 files, 0 B]"));
+    }
+
+    #[test]
+    fn grouped_html_has_one_heading_per_folder() {
+        let dir = tree();
+        let out = tempfile::NamedTempFile::new().unwrap();
+        let mut config = config(dir.path(), out.path());
+        config.format = Format::Html;
+        config.layout.group_by_folder = true;
+        config.layout.root_name = "Share".into();
+        run(&config);
+        let html = fs::read_to_string(out.path()).unwrap();
+        let headings: Vec<&str> = html.lines().filter(|l| l.starts_with("<h2>")).collect();
+        assert_eq!(
+            headings,
+            ["<h2>Share</h2>", "<h2>sub</h2>", "<h2>sub / deeper</h2>"]
+        );
     }
 
     #[test]

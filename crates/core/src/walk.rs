@@ -28,6 +28,10 @@ pub struct FoundFile {
 #[derive(Debug)]
 pub enum WalkItem {
     File(FoundFile),
+    /// A folder that is walked (empty ones included); `relative` uses `/`.
+    Dir {
+        relative: String,
+    },
     /// A zero-byte file: eMule does not share these, so they are skipped.
     Empty(PathBuf),
     /// An entry that could not be read.
@@ -42,6 +46,7 @@ enum EntryInfo {
     #[default]
     None,
     File(FoundFile),
+    Dir(String),
     Failed(String),
 }
 
@@ -80,7 +85,6 @@ pub fn walk(
 ) -> impl Iterator<Item = WalkItem> + Send {
     let base = root.to_path_buf();
     let iter = WalkDirGeneric::<State>::new(root)
-        .sort(true)
         .skip_hidden(false)
         .follow_links(false)
         .parallelism(Parallelism::RayonNewPool(threads.max(1)))
@@ -102,7 +106,9 @@ pub fn walk(
                 let hidden = is_hidden(&name, metadata.as_ref().ok());
 
                 if file_type.is_dir() {
-                    if !filters.dir_allowed(&name, &relative, hidden) {
+                    if filters.dir_allowed(&name, &relative, hidden) {
+                        entry.client_state = EntryInfo::Dir(relative);
+                    } else {
                         entry.read_children_path = None;
                     }
                     return true;
@@ -130,6 +136,15 @@ pub fn walk(
                 }
                 true
             });
+            // Files first, then sub-folders, each sorted by name: the files of a
+            // folder come out together, which folder-grouped outputs rely on.
+            children.sort_by(|a, b| match (a, b) {
+                (Ok(a), Ok(b)) => (a.file_type().is_dir(), a.file_name())
+                    .cmp(&(b.file_type().is_dir(), b.file_name())),
+                (Err(_), Ok(_)) => std::cmp::Ordering::Less,
+                (Ok(_), Err(_)) => std::cmp::Ordering::Greater,
+                (Err(_), Err(_)) => std::cmp::Ordering::Equal,
+            });
         });
 
     iter.into_iter().filter_map(|entry| match entry {
@@ -145,6 +160,7 @@ pub fn walk(
         Ok(entry) => match entry.client_state.clone() {
             EntryInfo::File(file) if file.size == 0 => Some(WalkItem::Empty(file.path)),
             EntryInfo::File(file) => Some(WalkItem::File(file)),
+            EntryInfo::Dir(relative) => Some(WalkItem::Dir { relative }),
             EntryInfo::Failed(message) => Some(WalkItem::Error {
                 path: entry.path(),
                 message,
@@ -216,8 +232,39 @@ mod tests {
         let items = collect(dir.path(), FilterConfig::default());
         assert_eq!(
             names(&items),
-            ["a/one.txt", "b/deep/two.txt", "skip/three.txt", "z.bin"]
+            ["z.bin", "a/one.txt", "b/deep/two.txt", "skip/three.txt"]
         );
+    }
+
+    #[test]
+    fn files_of_a_folder_come_before_its_sub_folders() {
+        let dir = tree();
+        fs::write(dir.path().join("a/zzz.txt"), b"after").unwrap();
+        fs::create_dir(dir.path().join("a/inner")).unwrap();
+        fs::write(dir.path().join("a/inner/in.txt"), b"in").unwrap();
+        let items = collect(dir.path(), FilterConfig::default());
+        let names = names(&items);
+        let in_a: Vec<&String> = names.iter().filter(|n| n.starts_with("a/")).collect();
+        assert_eq!(in_a, ["a/one.txt", "a/zzz.txt", "a/inner/in.txt"]);
+        // root files (z.bin) come before every sub-folder
+        assert_eq!(names.first().map(String::as_str), Some("z.bin"));
+    }
+
+    #[test]
+    fn folders_are_reported_even_when_empty() {
+        let dir = tree();
+        fs::create_dir(dir.path().join("hollow")).unwrap();
+        let items = collect(dir.path(), FilterConfig::default());
+        let dirs: Vec<&str> = items
+            .iter()
+            .filter_map(|i| match i {
+                WalkItem::Dir { relative } => Some(relative.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(dirs.contains(&"hollow"));
+        assert!(dirs.contains(&"b/deep"));
+        assert!(!dirs.contains(&".hidden"));
     }
 
     #[test]
@@ -288,8 +335,11 @@ mod tests {
     fn file_details_are_filled_in() {
         let dir = tree();
         let items = collect(dir.path(), FilterConfig::default());
-        let WalkItem::File(file) = &items[0] else {
-            panic!("expected a file first");
+        let Some(WalkItem::File(file)) = items
+            .iter()
+            .find(|i| matches!(i, WalkItem::File(f) if f.name == "one.txt"))
+        else {
+            panic!("expected one.txt");
         };
         assert_eq!(file.name, "one.txt");
         assert_eq!(file.size, 1);

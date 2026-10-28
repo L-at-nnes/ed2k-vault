@@ -1,8 +1,9 @@
 //! Streaming output writers: every entry is written as soon as it is hashed.
 
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{self, BufWriter, Seek, SeekFrom, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use crate::aich;
@@ -41,6 +42,8 @@ impl FromStr for Format {
 
 /// A hashed file as seen by the writers.
 pub struct Entry<'a> {
+    /// Folder below the scanned root, `/` separated; empty for the root itself.
+    pub folder: &'a str,
     pub name: &'a str,
     pub digest: &'a FileDigest,
 }
@@ -63,12 +66,54 @@ const BUFFER_SIZE: usize = 1 << 20;
 const HTML_HEADER: &str = "<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n<title>ed2k links</title>\n</head>\n<body>\n";
 const HTML_FOOTER: &str = "</body>\n</html>\n";
 
+/// How entries are arranged beyond the link content.
+#[derive(Debug, Clone, Default)]
+pub struct Layout {
+    /// HTML gets a heading per folder, CSV a `folder` column. Other text
+    /// formats stay plain lists.
+    pub group_by_folder: bool,
+    /// One `.emulecollection` per folder; the target is then a directory.
+    pub split_collections: bool,
+    /// Name used for entries of the scanned root folder.
+    pub root_name: String,
+}
+
 /// Opens `target` and returns the writer for `format`.
 pub fn create(
     format: Format,
     target: Target,
     options: LinkOptions,
 ) -> Result<Box<dyn EntryWriter>> {
+    create_with(format, target, options, &Layout::default())
+}
+
+/// Like [`create`], with a folder-aware [`Layout`].
+pub fn create_with(
+    format: Format,
+    target: Target,
+    options: LinkOptions,
+    layout: &Layout,
+) -> Result<Box<dyn EntryWriter>> {
+    if layout.split_collections {
+        let Target::File(dir) = target else {
+            return Err(Error::Invalid(
+                "one collection per folder needs an output folder".into(),
+            ));
+        };
+        if format != Format::Collection {
+            return Err(Error::Invalid(
+                "one collection per folder only works with the collection format".into(),
+            ));
+        }
+        std::fs::create_dir_all(dir).map_err(|e| Error::io(dir, e))?;
+        return Ok(Box::new(SplitCollectionWriter {
+            dir: dir.to_path_buf(),
+            root_name: layout.root_name.clone(),
+            options,
+            folders: Vec::new(),
+            index: HashMap::new(),
+        }));
+    }
     if format == Format::Collection {
         let Target::File(path) = target else {
             return Err(Error::Invalid(
@@ -98,6 +143,9 @@ pub fn create(
         out,
         options,
         style,
+        group: layout.group_by_folder,
+        root_name: layout.root_name.clone(),
+        last_folder: None,
     };
     writer
         .write_header()
@@ -117,6 +165,9 @@ struct TextWriter {
     out: Box<dyn Write + Send>,
     options: LinkOptions,
     style: Style,
+    group: bool,
+    root_name: String,
+    last_folder: Option<String>,
 }
 
 impl TextWriter {
@@ -124,6 +175,9 @@ impl TextWriter {
         match self.style {
             Style::Links | Style::UrlTag => Ok(()),
             Style::Html => self.out.write_all(HTML_HEADER.as_bytes()),
+            Style::Csv if self.group => {
+                self.out.write_all(b"\xEF\xBB\xBFname,size,link,folder\r\n")
+            }
             Style::Csv => self.out.write_all(b"\xEF\xBB\xBFname,size,link\r\n"),
         }
     }
@@ -157,6 +211,18 @@ fn escape_html(text: &str) -> String {
 impl EntryWriter for TextWriter {
     fn write_entry(&mut self, entry: &Entry) -> io::Result<()> {
         let link = link::build(entry.name, entry.digest, self.options);
+        if self.group
+            && matches!(self.style, Style::Html)
+            && self.last_folder.as_deref() != Some(entry.folder)
+        {
+            let title = if entry.folder.is_empty() {
+                self.root_name.clone()
+            } else {
+                entry.folder.replace('/', " / ")
+            };
+            writeln!(self.out, "<h2>{}</h2>", escape_html(&title))?;
+            self.last_folder = Some(entry.folder.to_string());
+        }
         match self.style {
             Style::Links => writeln!(self.out, "{link}"),
             Style::Html => writeln!(
@@ -165,6 +231,14 @@ impl EntryWriter for TextWriter {
                 escape_html(entry.name)
             ),
             Style::UrlTag => writeln!(self.out, "[url={link}]{}[/url]", entry.name),
+            Style::Csv if self.group => write!(
+                self.out,
+                "{},{},{},{}\r\n",
+                csv_cell(entry.name),
+                entry.digest.size,
+                csv_cell(&link),
+                csv_cell(entry.folder)
+            ),
             Style::Csv => write!(
                 self.out,
                 "{},{},{}\r\n",
@@ -266,6 +340,83 @@ impl EntryWriter for CollectionWriter {
     }
 }
 
+/// What a split collection keeps of a file until it is written.
+struct StoredFile {
+    name: String,
+    digest: FileDigest,
+}
+
+/// Writes one collection per folder. Files of a folder are not guaranteed to
+/// arrive together, so they are kept in memory (a few bytes each) and the
+/// collections are written when the scan ends.
+struct SplitCollectionWriter {
+    dir: PathBuf,
+    root_name: String,
+    options: LinkOptions,
+    folders: Vec<(String, Vec<StoredFile>)>,
+    index: HashMap<String, usize>,
+}
+
+impl SplitCollectionWriter {
+    /// File name of a folder's collection: its path with ` - ` between levels.
+    fn file_name(&self, folder: &str, taken: &mut HashSet<String>) -> String {
+        let label = if folder.is_empty() {
+            self.root_name.clone()
+        } else {
+            folder.replace('/', " - ")
+        };
+        let base = crate::compare::target_name(&label).unwrap_or_else(|| "collection".into());
+        let mut name = base.clone();
+        let mut n = 2;
+        while !taken.insert(name.to_lowercase()) {
+            name = format!("{base} ({n})");
+            n += 1;
+        }
+        format!("{name}.emulecollection")
+    }
+}
+
+impl EntryWriter for SplitCollectionWriter {
+    fn write_entry(&mut self, entry: &Entry) -> io::Result<()> {
+        let slot = match self.index.get(entry.folder) {
+            Some(&slot) => slot,
+            None => {
+                self.folders.push((entry.folder.to_string(), Vec::new()));
+                self.index
+                    .insert(entry.folder.to_string(), self.folders.len() - 1);
+                self.folders.len() - 1
+            }
+        };
+        self.folders[slot].1.push(StoredFile {
+            name: entry.name.to_string(),
+            digest: FileDigest {
+                size: entry.digest.size,
+                hash: entry.digest.hash,
+                part_hashes: Vec::new(),
+                aich: entry.digest.aich,
+            },
+        });
+        Ok(())
+    }
+
+    fn finish(self: Box<Self>) -> io::Result<()> {
+        let mut taken = HashSet::new();
+        for (folder, files) in &self.folders {
+            let path = self.dir.join(self.file_name(folder, &mut taken));
+            let mut writer = CollectionWriter::new(File::create(&path)?, self.options)?;
+            for file in files {
+                writer.write_entry(&Entry {
+                    folder,
+                    name: &file.name,
+                    digest: &file.digest,
+                })?;
+            }
+            Box::new(writer).finish()?;
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -286,6 +437,7 @@ mod tests {
         for name in names {
             writer
                 .write_entry(&Entry {
+                    folder: "",
                     name,
                     digest: &digest,
                 })
@@ -377,6 +529,7 @@ mod tests {
         digest.size = 5_000_000_000;
         writer
             .write_entry(&Entry {
+                folder: "",
                 name: "big",
                 digest: &digest,
             })
@@ -391,6 +544,146 @@ mod tests {
     #[test]
     fn collection_cannot_go_to_stdout() {
         assert!(create(Format::Collection, Target::Stdout, LinkOptions::default()).is_err());
+    }
+
+    fn render_grouped(format: Format, files: &[(&str, &str)]) -> String {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let layout = Layout {
+            group_by_folder: true,
+            root_name: "Share".into(),
+            ..Layout::default()
+        };
+        let mut writer = create_with(
+            format,
+            Target::File(file.path()),
+            LinkOptions::default(),
+            &layout,
+        )
+        .unwrap();
+        let digest = digest();
+        for (folder, name) in files {
+            writer
+                .write_entry(&Entry {
+                    folder,
+                    name,
+                    digest: &digest,
+                })
+                .unwrap();
+        }
+        writer.finish().unwrap();
+        String::from_utf8(std::fs::read(file.path()).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn html_gets_a_heading_each_time_the_folder_changes() {
+        let html = render_grouped(
+            Format::Html,
+            &[
+                ("", "r.txt"),
+                ("A/Akim", "a1"),
+                ("A/Akim", "a2"),
+                ("K", "k1"),
+            ],
+        );
+        let headings: Vec<&str> = html.lines().filter(|l| l.starts_with("<h2>")).collect();
+        assert_eq!(
+            headings,
+            ["<h2>Share</h2>", "<h2>A / Akim</h2>", "<h2>K</h2>"]
+        );
+        let akim = html.find("A / Akim").unwrap();
+        assert!(html.find(">a1<").unwrap() > akim && html.find(">k1<").unwrap() > akim);
+    }
+
+    #[test]
+    fn csv_gets_a_folder_column_when_grouped() {
+        let csv = render_grouped(Format::Csv, &[("A/Akim", "a1.cbz")]);
+        let mut lines = csv[3..].lines();
+        assert_eq!(lines.next(), Some("name,size,link,folder"));
+        let row = lines.next().unwrap();
+        assert!(row.starts_with("\"a1.cbz\",42,\"ed2k://"));
+        assert!(row.ends_with(",\"A/Akim\""));
+    }
+
+    #[test]
+    fn plain_formats_ignore_grouping() {
+        let text = render_grouped(Format::Links, &[("A", "x"), ("B", "y")]);
+        assert_eq!(text.lines().count(), 2);
+        assert!(text.lines().all(|l| l.starts_with("ed2k://")));
+    }
+
+    #[test]
+    fn split_collections_write_one_file_per_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("collections");
+        let layout = Layout {
+            split_collections: true,
+            root_name: "Share".into(),
+            ..Layout::default()
+        };
+        let mut writer = create_with(
+            Format::Collection,
+            Target::File(&out),
+            LinkOptions::default(),
+            &layout,
+        )
+        .unwrap();
+        let digest = digest();
+        // folders interleaved on purpose
+        for (folder, name) in [
+            ("", "root1"),
+            ("--- A ---/Akim", "a1"),
+            ("", "root2"),
+            ("--- A ---/Akim", "a2"),
+        ] {
+            writer
+                .write_entry(&Entry {
+                    folder,
+                    name,
+                    digest: &digest,
+                })
+                .unwrap();
+        }
+        writer.finish().unwrap();
+
+        let mut names: Vec<String> = std::fs::read_dir(&out)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            ["--- A --- - Akim.emulecollection", "Share.emulecollection"]
+        );
+        let akim = crate::linklist::load(&out.join("--- A --- - Akim.emulecollection")).unwrap();
+        assert_eq!(
+            akim.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(),
+            ["a1", "a2"]
+        );
+        let root = crate::linklist::load(&out.join("Share.emulecollection")).unwrap();
+        assert_eq!(root.len(), 2);
+    }
+
+    #[test]
+    fn split_collections_need_a_directory_target_and_the_collection_format() {
+        let layout = Layout {
+            split_collections: true,
+            ..Layout::default()
+        };
+        assert!(create_with(
+            Format::Collection,
+            Target::Stdout,
+            LinkOptions::default(),
+            &layout
+        )
+        .is_err());
+        let dir = tempfile::tempdir().unwrap();
+        assert!(create_with(
+            Format::Html,
+            Target::File(dir.path()),
+            LinkOptions::default(),
+            &layout
+        )
+        .is_err());
     }
 
     #[test]
