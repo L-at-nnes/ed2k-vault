@@ -32,6 +32,9 @@ fn read_form(ui: &MainWindow) -> Form {
         hashset: ui.get_hashset(),
         aich: ui.get_aich(),
         hidden: ui.get_hidden(),
+        group_by_folder: ui.get_group_by_folder(),
+        split_collections: ui.get_split_collections(),
+        save_tree: ui.get_save_tree(),
         use_cache: ui.get_use_cache(),
         include_ext: ui.get_include_ext().into(),
         exclude_ext: ui.get_exclude_ext().into(),
@@ -93,10 +96,14 @@ fn main() -> Result<(), slint::PlatformError> {
             let Some(ui) = ui.upgrade() else { return };
             let index = (ui.get_format_index().max(0) as usize).min(FORMATS.len() - 1);
             let (label, _, extension) = FORMATS[index];
-            let picked = rfd::FileDialog::new()
-                .add_filter(label, &[extension])
-                .set_file_name(format!("ed2k-links.{extension}"))
-                .save_file();
+            let picked = if ui.get_split_collections() {
+                rfd::FileDialog::new().pick_folder()
+            } else {
+                rfd::FileDialog::new()
+                    .add_filter(label, &[extension])
+                    .set_file_name(format!("ed2k-links.{extension}"))
+                    .save_file()
+            };
             if let Some(path) = picked {
                 ui.set_output_path(path.to_string_lossy().as_ref().into());
             }
@@ -116,6 +123,10 @@ fn main() -> Result<(), slint::PlatformError> {
         let ui = ui.as_weak();
         move |index| {
             if let Some(ui) = ui.upgrade() {
+                // With one collection per folder the result is a folder, not a file.
+                if ui.get_split_collections() {
+                    return;
+                }
                 let path = with_format_extension(&ui.get_output_path(), index.max(0) as usize);
                 ui.set_output_path(path.into());
             }

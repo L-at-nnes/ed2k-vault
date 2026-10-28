@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use ed2k_vault_core::filter::{parse_size, FilterConfig};
 use ed2k_vault_core::link::LinkOptions;
-use ed2k_vault_core::output::Format;
+use ed2k_vault_core::output::{Format, Layout};
 use ed2k_vault_core::scan::ScanConfig;
 
 /// Output formats in the order of the drop-down, with their file extension.
@@ -28,6 +28,9 @@ pub struct Form {
     pub hashset: bool,
     pub aich: bool,
     pub hidden: bool,
+    pub group_by_folder: bool,
+    pub split_collections: bool,
+    pub save_tree: bool,
     pub use_cache: bool,
     pub include_ext: String,
     pub exclude_ext: String,
@@ -70,6 +73,21 @@ pub fn with_format_extension(path: &str, format_index: usize) -> String {
         .into_owned()
 }
 
+/// Where the folder tree is saved: beside the result, or inside the folder of
+/// per-folder collections.
+pub fn tree_path(output: &str, split_collections: bool) -> PathBuf {
+    let output = Path::new(output);
+    if split_collections {
+        output.join("folder-tree.txt")
+    } else {
+        let stem = output
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "ed2k-links".into());
+        output.with_file_name(format!("{stem}.tree.txt"))
+    }
+}
+
 /// Format implied by a typed output name; `.txt` is ambiguous, so it implies none.
 pub fn format_for_path(path: &str) -> Option<usize> {
     let extension = Path::new(path.trim()).extension()?.to_str()?.to_lowercase();
@@ -107,7 +125,22 @@ impl Form {
         };
         config.hash_threads = self.threads.max(1);
         config.jobs = self.jobs.max(1);
-        config.format = FORMATS[self.format_index.min(FORMATS.len() - 1)].1;
+        config.format = if self.split_collections {
+            Format::Collection
+        } else {
+            FORMATS[self.format_index.min(FORMATS.len() - 1)].1
+        };
+        config.layout = Layout {
+            group_by_folder: self.group_by_folder,
+            split_collections: self.split_collections,
+            root_name: Path::new(root)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "root".into()),
+        };
+        if self.save_tree {
+            config.tree = Some(tree_path(output, self.split_collections));
+        }
         config.link = LinkOptions {
             hashset: self.hashset,
             aich: self.aich,
@@ -185,6 +218,28 @@ mod tests {
         let mut form = valid();
         form.max_size = "huge".into();
         assert!(form.to_config().unwrap_err().starts_with("Maximum size"));
+    }
+
+    #[test]
+    fn folder_options_are_passed_on() {
+        let mut form = valid();
+        form.group_by_folder = true;
+        form.save_tree = true;
+        let config = form.to_config().unwrap();
+        assert!(config.layout.group_by_folder && !config.layout.split_collections);
+        assert_eq!(config.tree, Some(PathBuf::from("out.tree.txt")));
+    }
+
+    #[test]
+    fn split_collections_force_the_collection_format() {
+        let mut form = valid();
+        form.format_index = 1;
+        form.split_collections = true;
+        form.save_tree = true;
+        let config = form.to_config().unwrap();
+        assert_eq!(config.format, Format::Collection);
+        assert!(config.layout.split_collections);
+        assert_eq!(config.tree, Some(PathBuf::from("out.txt/folder-tree.txt")));
     }
 
     #[test]

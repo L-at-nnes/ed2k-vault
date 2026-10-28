@@ -52,6 +52,9 @@ export component MainWindow inherits Window {
     in-out property <bool> aich: true;
     in-out property <bool> hashset: false;
     in-out property <bool> hidden: false;
+    in-out property <bool> group-by-folder: false;
+    in-out property <bool> split-collections: false;
+    in-out property <bool> save-tree: false;
     in-out property <bool> use-cache: true;
     in-out property <string> include-ext;
     in-out property <string> exclude-ext;
@@ -161,6 +164,32 @@ export component MainWindow inherits Window {
                         }
                         Hint {
                             text: "Names are kept exactly as they are on disk.";
+                        }
+                    }
+                }
+
+                Card {
+                    VerticalLayout {
+                        padding: 16px;
+                        spacing: 8px;
+                        SectionTitle { text: "Folder structure"; }
+                        CheckBox {
+                            text: "Group by folder (headings in HTML, a folder column in CSV)";
+                            checked <=> root.group-by-folder;
+                            enabled: !root.running;
+                        }
+                        CheckBox {
+                            text: "One eMule collection per folder (the result is then a folder)";
+                            checked <=> root.split-collections;
+                            enabled: !root.running;
+                        }
+                        CheckBox {
+                            text: "Also save the folder tree as a text file next to the result";
+                            checked <=> root.save-tree;
+                            enabled: !root.running;
+                        }
+                        Hint {
+                            text: "Empty folders only appear in the folder tree.";
                         }
                     }
                 }
