@@ -191,3 +191,85 @@ fn compare_fails_on_a_file_without_links() {
         .unwrap()
         .contains("no ed2k file link"));
 }
+
+fn series_tree() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    fs::create_dir_all(dir.path().join("--- A ---/Akim")).unwrap();
+    fs::create_dir_all(dir.path().join("--- K ---/Empty")).unwrap();
+    fs::write(dir.path().join("readme.txt"), b"root file").unwrap();
+    fs::write(dir.path().join("--- A ---/Akim/Akim 01.cbz"), b"akim one").unwrap();
+    fs::write(dir.path().join("--- A ---/Akim/Akim 02.cbz"), b"akim two").unwrap();
+    dir
+}
+
+fn sibling(dir: &tempfile::TempDir, suffix: &str) -> std::path::PathBuf {
+    dir.path().join("..").join(format!(
+        "ed2k-vault-{}-{suffix}",
+        dir.path().file_name().unwrap().to_string_lossy()
+    ))
+}
+
+#[test]
+fn group_by_folder_puts_headings_in_the_html() {
+    let tree = series_tree();
+    let out = sibling(&tree, "grouped.html");
+    let output = vault(&[
+        path(tree.path()),
+        "--out",
+        path(&out),
+        "--no-cache",
+        "--quiet",
+        "--group-by-folder",
+    ]);
+    assert!(output.status.success());
+    let html = fs::read_to_string(&out).unwrap();
+    fs::remove_file(&out).unwrap();
+    assert!(html.contains("<h2>--- A --- / Akim</h2>"));
+    assert!(html.find("readme.txt").unwrap() < html.find("--- A --- / Akim").unwrap());
+}
+
+#[test]
+fn tree_file_lists_folders_including_empty_ones() {
+    let tree = series_tree();
+    let tree_file = sibling(&tree, "tree.txt");
+    let output = vault(&[
+        path(tree.path()),
+        "--tree",
+        path(&tree_file),
+        "--no-cache",
+        "--quiet",
+    ]);
+    assert!(output.status.success());
+    let text = fs::read_to_string(&tree_file).unwrap();
+    fs::remove_file(&tree_file).unwrap();
+    assert!(text.contains("\n  --- A ---/  [0 files, 0 B]"));
+    assert!(text.contains("\n    Akim/  [2 files, 16 B]"));
+    assert!(text.contains("\n    Empty/  [0 files, 0 B]"));
+}
+
+#[test]
+fn split_collections_write_a_file_per_folder_named_after_its_path() {
+    let tree = series_tree();
+    let out = sibling(&tree, "collections");
+    let output = vault(&[
+        path(tree.path()),
+        "--out",
+        path(&out),
+        "--split-collections",
+        "--no-cache",
+        "--quiet",
+    ]);
+    assert!(output.status.success());
+    let mut names: Vec<String> = fs::read_dir(&out)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    let akim = fs::metadata(out.join("--- A --- - Akim.emulecollection"))
+        .unwrap()
+        .len();
+    fs::remove_dir_all(&out).unwrap();
+    assert_eq!(names.len(), 2, "{names:?}");
+    assert!(names.contains(&"--- A --- - Akim.emulecollection".to_string()));
+    assert!(akim > 12);
+}

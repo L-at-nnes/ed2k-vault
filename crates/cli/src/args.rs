@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use clap::{Args, Parser, Subcommand};
 use ed2k_vault_core::filter::{parse_size, FilterConfig};
 use ed2k_vault_core::link::LinkOptions;
-use ed2k_vault_core::output::Format;
+use ed2k_vault_core::output::{Format, Layout};
 use ed2k_vault_core::scan::{default_jobs, default_threads, ScanConfig};
 
 #[derive(Debug, Parser)]
@@ -45,6 +45,18 @@ pub struct ScanArgs {
     /// Skip the AICH hash (faster, no `h=` in the links)
     #[arg(long)]
     pub no_aich: bool,
+
+    /// Keep the folder structure: a heading per folder in HTML, a `folder` column in CSV
+    #[arg(long)]
+    pub group_by_folder: bool,
+
+    /// Write one .emulecollection per folder into the --out folder
+    #[arg(long, requires = "out", conflicts_with = "format")]
+    pub split_collections: bool,
+
+    /// Also save the folder structure (empty folders included) as a text tree
+    #[arg(long)]
+    pub tree: Option<PathBuf>,
 
     #[command(flatten)]
     pub options: SharedOptions,
@@ -177,11 +189,25 @@ impl SharedOptions {
 
 impl ScanArgs {
     pub fn into_config(self) -> ScanConfig {
-        let format = self
-            .format
-            .or_else(|| self.out.as_deref().map(format_from_path))
-            .unwrap_or(Format::Links);
+        let format = if self.split_collections {
+            Format::Collection
+        } else {
+            self.format
+                .or_else(|| self.out.as_deref().map(format_from_path))
+                .unwrap_or(Format::Links)
+        };
+        let root_name = self
+            .root
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "root".into());
         let mut config = ScanConfig::new(self.root);
+        config.layout = Layout {
+            group_by_folder: self.group_by_folder,
+            split_collections: self.split_collections,
+            root_name,
+        };
+        config.tree = self.tree;
         self.options.apply(&mut config);
         config.format = format;
         config.link = LinkOptions {
@@ -253,6 +279,38 @@ mod tests {
         assert_eq!(config.filters.min_size, Some(1 << 20));
         assert!(config.filters.include_hidden);
         assert!(config.cache.is_none());
+    }
+
+    #[test]
+    fn folder_options_reach_the_config() {
+        let config = config(&[
+            "D:/Periodiques FR",
+            "--group-by-folder",
+            "--tree",
+            "tree.txt",
+        ]);
+        assert!(config.layout.group_by_folder && !config.layout.split_collections);
+        assert_eq!(config.layout.root_name, "Periodiques FR");
+        assert_eq!(config.tree, Some(PathBuf::from("tree.txt")));
+    }
+
+    #[test]
+    fn split_collections_imply_the_collection_format_and_need_an_output_folder() {
+        let config = config(&["d", "--split-collections", "--out", "collections"]);
+        assert_eq!(config.format, Format::Collection);
+        assert!(config.layout.split_collections);
+        assert!(Cli::try_parse_from(["ed2k-vault", "scan", "d", "--split-collections"]).is_err());
+        assert!(Cli::try_parse_from([
+            "ed2k-vault",
+            "scan",
+            "d",
+            "--split-collections",
+            "--out",
+            "o",
+            "--format",
+            "html"
+        ])
+        .is_err());
     }
 
     #[test]
